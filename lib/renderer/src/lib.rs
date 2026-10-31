@@ -29,9 +29,10 @@ pub mod texture;
 pub mod ui_renderer;
 pub mod water;
 
-/// The terrain shader, after the water's waves it draws caustics from.
+/// The terrain shader, after the water's waves it draws caustics from and the lamps it shares with grass.
 pub const TERRAIN_WGSL: &str = concat!(
     include_str!("shaders/water_waves.wgsl"),
+    include_str!("shaders/scene_lamps.wgsl"),
     include_str!("shaders/terrain.wgsl")
 );
 /// The HD water shader, after its waves.

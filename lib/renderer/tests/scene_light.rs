@@ -314,7 +314,7 @@ const LIGHT_SHADERS: [(&str, &str); 7] = [
     ("terrain", nostalre_renderer::TERRAIN_WGSL),
     ("model", include_str!("../src/shaders/model.wgsl")),
     ("model_animated", include_str!("../src/shaders/model_animated.wgsl")),
-    ("grass", include_str!("../src/shaders/grass.wgsl")),
+    ("grass", nostalre_renderer::grass::GRASS_WGSL),
     ("gr2_model", include_str!("../src/shaders/gr2_model.wgsl")),
     ("water", include_str!("../src/shaders/water.wgsl")),
     ("water_hd", nostalre_renderer::WATER_HD_WGSL),
@@ -352,11 +352,10 @@ fn light_shaders_validate() {
     }
 }
 
-/// The terrain draws the lamps (S5): it reads the shared point-light uniform, laid out as the Rust one.
 /// Grass under a lamp is lit like the ground it grows on: it reads the same point lights, laid out as Rust sends them.
 #[test]
 fn grass_reads_point_lights() {
-    let src = include_str!("../src/shaders/grass.wgsl");
+    let src = nostalre_renderer::grass::GRASS_WGSL;
     let module = parse("grass", src);
     let span = module
         .types
@@ -372,8 +371,13 @@ fn grass_reads_point_lights() {
         std::mem::size_of::<nostalre_renderer::global_uniforms::PointLightsUniform>()
     );
     assert!(src.contains("lamps(in.world_position)"), "the grass adds the lamps");
+    // one lamp sum for both: the same source text, not a copy that can drift
+    let shared = "fn lamps(world: vec3<f32>) -> vec3<f32> {";
+    assert_eq!(src.matches(shared).count(), 1);
+    assert_eq!(nostalre_renderer::TERRAIN_WGSL.matches(shared).count(), 1);
 }
 
+/// The terrain draws the lamps (S5): it reads the shared point-light uniform, laid out as the Rust one.
 #[test]
 fn terrain_reads_point_lights() {
     let src = nostalre_renderer::TERRAIN_WGSL;

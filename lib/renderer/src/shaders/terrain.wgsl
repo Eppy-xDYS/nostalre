@@ -22,16 +22,6 @@ struct LightUniforms {
     _reserved: vec4<f32>,
 };
 
-struct PointLight {
-    position: vec4<f32>,
-    color_range: vec4<f32>,
-};
-
-struct PointLights {
-    count: u32,
-    lights: array<PointLight, 32>, // MAX_POINT_LIGHTS in global_uniforms.rs
-};
-
 struct FogUniforms {
     color: vec4<f32>,
     near: f32,
@@ -54,7 +44,6 @@ struct WaterGlobals {
 
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
 @group(0) @binding(1) var<uniform> light: LightUniforms;
-@group(0) @binding(2) var<uniform> point_lights: PointLights;
 @group(0) @binding(3) var<uniform> fog: FogUniforms;
 @group(0) @binding(7) var<uniform> water_globals: WaterGlobals;
 @group(1) @binding(0) var ground_texture: texture_2d<f32>;
@@ -137,52 +126,12 @@ fn night_lift(lit: vec3<f32>, surface: vec3<f32>, lm: vec3<f32>) -> vec3<f32> {
 }
 
 const BAKED_SHADOW: f32 = 0.6;
-const PL_FALLOFF: f32 = 40.0;
-const KNEE: f32 = 0.70;
-const KNEE_LIMIT: f32 = 1.15;
-const LAMP_SCALE: f32 = 0.8;
 
 // the share of light a baked shadow leaves: floors only, the usual lit level (alpha 0.65 and up) fully lit
 fn baked_shadow(alpha: f32, normal_up: f32) -> f32 {
     let floor_part = smoothstep(0.35, 0.70, normal_up);
     let shade = smoothstep(0.20, 0.65, clamp(alpha, 0.0, 1.0));
     return 1.0 + (shade - 1.0) * BAKED_SHADOW * floor_part;
-}
-
-// windowed inverse square: 1 at the lamp, 0 at its range
-fn point_atten(d: f32, range: f32) -> f32 {
-    if (range <= 0.0 || d >= range) {
-        return 0.0;
-    }
-    let t2 = (d / range) * (d / range);
-    let window = 1.0 - t2 * t2;
-    return window * window / (1.0 + PL_FALLOFF * t2);
-}
-
-// summed lamps, overlapping hot ones rolled off instead of clipped
-fn light_knee(sum: vec3<f32>) -> vec3<f32> {
-    let e = max(sum.r, max(sum.g, sum.b));
-    var scale = 1.0;
-    if (e > KNEE) {
-        let span = KNEE_LIMIT - KNEE;
-        scale = (KNEE + span * (1.0 - exp(-(e - KNEE) / span))) / e;
-    }
-    return sum * scale * LAMP_SCALE;
-}
-
-// the map lamps nearest the camera (up to the preset's cap), plus the torch in slot 0 at night
-fn lamps(world: vec3<f32>) -> vec3<f32> {
-    let torch = select(0u, 1u, light.scene.y > 0.0);
-    let count = min(point_lights.count, u32(light.scene.w) + torch);
-    var sum = vec3<f32>(0.0);
-    for (var i = 0u; i < count; i++) {
-        let l = point_lights.lights[i];
-        let d = length(world - l.position.xyz);
-        if (d < l.color_range.a) {
-            sum += l.color_range.rgb * point_atten(d, l.color_range.a);
-        }
-    }
-    return light_knee(sum);
 }
 
 // HD sun shadows (shadow.rs): the map seen from the sun, its compare sampler, and strength (night applied), texel,

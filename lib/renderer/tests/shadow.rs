@@ -154,7 +154,7 @@ const WORLD_SHADERS: [(&str, &str); 7] = [
     ("terrain", nostalre_renderer::TERRAIN_WGSL),
     ("model", include_str!("../src/shaders/model.wgsl")),
     ("model_animated", include_str!("../src/shaders/model_animated.wgsl")),
-    ("grass", include_str!("../src/shaders/grass.wgsl")),
+    ("grass", nostalre_renderer::grass::GRASS_WGSL),
     ("gr2_model", include_str!("../src/shaders/gr2_model.wgsl")),
     ("water", include_str!("../src/shaders/water.wgsl")),
     ("water_hd", nostalre_renderer::WATER_HD_WGSL),

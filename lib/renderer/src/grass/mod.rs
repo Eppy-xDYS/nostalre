@@ -16,7 +16,11 @@ use chunks::{CHUNK_CELLS, ChunkBox};
 use classify::TextureInfo;
 use scatter::{FieldInput, GrassField, Tier};
 
-pub const GRASS_WGSL: &str = include_str!("../shaders/grass.wgsl");
+/// The grass shader, after the lamps it shares with the terrain (scene_lamps.wgsl).
+pub const GRASS_WGSL: &str = concat!(
+    include_str!("../shaders/scene_lamps.wgsl"),
+    include_str!("../shaders/grass.wgsl")
+);
 
 /// Tufts fade out toward this distance from the camera target (32 cells): past the screen's edge at the
 /// default zoom.
