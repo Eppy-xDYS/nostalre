@@ -15,14 +15,21 @@ pub const SUN_GAIN: f32 = 0.5;
 /// Sun glow starts at this brightness (brightest channel) and is full at white: mid-tone sand stays as it is.
 pub const SUN_KNEE: f32 = 0.8;
 
-const LAMP_WORDS: [&str; 12] = [
-    "lamp", "torch", "candle", "lantern", "brazier", "가로등", "램프", "촛불", "횃불", "등불", "화로", "양초",
+const LAMP_WORDS: [&str; 18] = [
+    "lamp", "torch", "candle", "lantern", "brazier", "chandelier", "fireplace", "campfire", "가로등", "램프", "촛불",
+    "횃불", "등불", "화로", "양초", "샹들리에", "조명", "초롱",
 ];
+/// `light` words that are not lights
+const NOT_LIGHT: [&str; 4] = ["delight", "highlight", "lighthouse", "lightning"];
+/// After `등` (lamp) these make another word: 등대 lighthouse, 등걸 stump, 등나무 wisteria, 등받이 backrest
+const NOT_LAMP_AFTER_DEUNG: [char; 4] = ['대', '걸', '나', '받'];
 
-/// A model or texture is a light source by its file name: lamp, torch, candle, lantern, brazier (also in Korean:
-/// 가로등 street lamp, 화로 brazier...), or a `light` word (`bif_light01`, `cave_inlight01`), not `lighthouse` or
-/// `lightning`. The folder does not count. A lamp model's textures mostly have plain names (`UP.BMP`), so a model
-/// match flags all of its textures; the mask then picks the bright parts.
+/// A model or texture is a light source by its file name: lamp, torch, candle, lantern, brazier, chandelier,
+/// fireplace (also in Korean: 가로등 street lamp, 화로 brazier, 샹들리에, 조명 lighting...), a `light` word
+/// (`bif_light01`, `walllight`, `lighting`, `lit`, `stringlights`) but not `lighthouse`, `lightning`, `delight` or
+/// `highlight`, a `fire` word (`fire_thing`), or a Korean `등` lamp (벽등 wall lamp, 천정등, 페이욘등, `중국-등`) but
+/// not 등대 (lighthouse) or 나뭇등걸 (stump). The folder does not count. A lamp model's textures mostly have plain
+/// names (`UP.BMP`), so a model match flags all of its textures; its glass comes from `lamp_glass` or the mask.
 pub fn is_lamp_name(path: &str) -> bool {
     let file = path.rsplit(['\\', '/']).next().unwrap_or(path).to_lowercase();
     let stem = file.rsplit_once('.').map_or(file.as_str(), |(stem, _)| stem);
@@ -30,7 +37,56 @@ pub fn is_lamp_name(path: &str) -> bool {
         || stem
             .split(['_', '-', ' '])
             .map(|word| word.trim_matches(|c: char| c.is_ascii_digit()))
-            .any(|word| word == "light" || word == "inlight")
+            .any(is_light_word)
+        || korean_lamp(stem)
+}
+
+fn is_light_word(word: &str) -> bool {
+    if NOT_LIGHT.iter().any(|n| word.contains(n)) {
+        return false;
+    }
+    word == "lit" || word == "fire" || word.ends_with("light") || word.ends_with("lights") || word.starts_with("light")
+}
+
+fn korean_lamp(stem: &str) -> bool {
+    let chars: Vec<char> = stem.chars().collect();
+    chars
+        .iter()
+        .enumerate()
+        .any(|(i, c)| *c == '등' && chars.get(i + 1).is_none_or(|n| !NOT_LAMP_AFTER_DEUNG.contains(n)))
+}
+
+/// A listed lamp's faces (`lamp_glass`): `EMISSIVE_NAMED` where the face's UV centre falls in one of its glass
+/// rects on that texture, else 0; `None` for a model the table doesn't list (the name and mask rules apply).
+/// Paths in any case, either slash, with or without `data\model\` / `data\texture\`.
+pub fn glass_emissive(model_path: &str, texture: &str, uv: [f32; 2]) -> Option<f32> {
+    glass_for(model_path).map(|glass| glass_face(glass, texture, uv))
+}
+
+/// The table's glass for a model, if listed.
+pub fn glass_for(model_path: &str) -> Option<&'static [super::lamp_glass::Glass]> {
+    let key = normalise(model_path, "data\\model\\");
+    super::lamp_glass::LAMP_GLASS
+        .iter()
+        .find(|(model, _)| *model == key)
+        .map(|(_, glass)| *glass)
+}
+
+/// A face of a listed lamp: `EMISSIVE_NAMED` inside one of the glass rects on its texture, else 0.
+pub fn glass_face(glass: &[super::lamp_glass::Glass], texture: &str, uv: [f32; 2]) -> f32 {
+    let texture = normalise(texture, "data\\texture\\");
+    let inside = glass.iter().any(|g| {
+        g.texture == texture && (g.uv[0]..=g.uv[2]).contains(&uv[0]) && (g.uv[1]..=g.uv[3]).contains(&uv[1])
+    });
+    if inside { EMISSIVE_NAMED } else { 0.0 }
+}
+
+fn normalise(path: &str, prefix: &str) -> String {
+    let path = path.replace('/', "\\").to_lowercase();
+    match path.strip_prefix(prefix) {
+        Some(rest) => rest.to_string(),
+        None => path,
+    }
 }
 
 /// A vertex's `emissive`: its texture is named for a lamp

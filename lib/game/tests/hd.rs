@@ -295,3 +295,35 @@ fn sky_parses() {
         assert_eq!(parse_chat_command(bad), ChatCommand::SkyUsage, "{bad}");
     }
 }
+
+#[test]
+fn shadow_defaults_and_tier() {
+    let config = HdConfig::default();
+    assert_eq!(config.sun_shadows, 0.65);
+    assert_eq!(config.shadow_strength(), 0.65);
+    let old: HdConfig = serde_json::from_str(r#"{"enabled": true, "day_cycle": false}"#).unwrap();
+    assert_eq!(old.sun_shadows, 0.65, "a config from before S7 gets shadows");
+    let with = |sun_shadows| HdConfig {
+        sun_shadows,
+        ..HdConfig::default()
+    };
+    assert_eq!(with(3.0).shadow_strength(), 1.0);
+    assert_eq!(with(f32::NAN).shadow_strength(), 0.0);
+    let tier = |preset| {
+        HdConfig {
+            preset,
+            ..HdConfig::default()
+        }
+        .shadow_tier()
+    };
+    assert_eq!(tier(HdPreset::Low), 0);
+    assert_eq!(tier(HdPreset::Medium), 1);
+    assert_eq!(tier(HdPreset::High), 2);
+    assert_eq!(tier(HdPreset::Ultra), 3);
+    assert_eq!(tier(HdPreset::Custom), 2);
+    let on = HdConfig {
+        enabled: true,
+        ..HdConfig::default()
+    };
+    assert!(!hd::needs_restart(&on, &with(0.0), true), "live");
+}

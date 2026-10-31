@@ -214,6 +214,36 @@ pub fn is_placed(position: [f32; 3]) -> bool {
     position != [0.0; 3]
 }
 
+/// A lamp model's light at night: warm, about 6 cells (S2d, D44).
+pub const LAMP_COLOR: [f32; 3] = [0.6, 0.48, 0.33];
+pub const LAMP_RANGE: f32 = 60.0;
+
+/// The light of a lamp model whose top is `head`.
+pub fn lamp_light(head: glam::Vec3) -> PointLightGpu {
+    PointLightGpu {
+        position: [head.x, head.y, head.z, 0.0],
+        color_range: [LAMP_COLOR[0], LAMP_COLOR[1], LAMP_COLOR[2], LAMP_RANGE],
+    }
+}
+
+/// The lights the frame picks from: the map's own, and at night (`night` 0 to 1) the lamp models' too, as strong as
+/// the night is deep.
+pub fn night_lights(map: &[PointLightGpu], lamps: &[PointLightGpu], night: f32) -> Vec<PointLightGpu> {
+    let mut all = map.to_vec();
+    if night > 0.0 {
+        all.extend(lamps.iter().map(|l| PointLightGpu {
+            position: l.position,
+            color_range: [
+                l.color_range[0] * night,
+                l.color_range[1] * night,
+                l.color_range[2] * night,
+                l.color_range[3],
+            ],
+        }));
+    }
+    all
+}
+
 /// The torch over the player (`target`) at `night`; none by day or indoors. Up is -y.
 pub fn torch(target: glam::Vec3, night: f32, outdoors: bool) -> Option<PointLightGpu> {
     if night <= 0.0 || !outdoors {

@@ -2,6 +2,7 @@ use nostalre_renderer::LightUniform;
 use nostalre_renderer::model::{AnimatedModelVertex, ModelVertex};
 use nostalre_renderer::post::HdOptions;
 use nostalre_renderer::post::glow::{self, POOL_GAIN, POOL_THRESHOLD, SUN_GAIN};
+use nostalre_renderer::post::lamp_glass;
 
 const LEVELS: [f32; 3] = [0.6, 0.5, 0.3];
 
@@ -46,9 +47,84 @@ fn lamp_names_reject() {
         "data\\model\\페이욘\\주점.rsm",
         "data\\texture\\프론테라\\UP.BMP",
         "",
+        // look-alikes of the S2d words
+        "data\\model\\등대섬\\그물.rsm",
+        "data\\model\\기타\\등대01.rsm",
+        "data\\model\\나무잡초꽃\\덤불01.rsm",
+        "data\\model\\나무잡초꽃\\모로코 나뭇등걸.rsm",
+        "data\\model\\해변마을\\해변가_불가사리1.rsm",
+        "data\\model\\아요타야\\와불.rsm",
+        "data\\model\\페이욘\\이불채.rsm",
+        "data\\texture\\effect\\highlight01.bmp",
+        "data\\model\\기타\\등나무.rsm",
     ] {
         assert!(!glow::is_lamp_name(name), "{name}");
     }
+}
+
+/// Every lamp model the S2d survey of all maps found (chandeliers, wall and ceiling lamps, lanterns, fireplaces,
+/// braziers...) counts as a lamp.
+const SURVEY_LAMPS: &str = include_str!("data/lamp_models.txt");
+
+fn survey_lamps() -> impl Iterator<Item = &'static str> {
+    SURVEY_LAMPS.lines().map(str::trim).filter(|l| !l.is_empty())
+}
+
+#[test]
+fn survey_lamp_models_are_lamps() {
+    let missed: Vec<&str> = survey_lamps().filter(|m| !glow::is_lamp_name(m)).collect();
+    assert!(missed.is_empty(), "not lamps by name: {missed:?}");
+}
+
+#[test]
+fn glass_table_covers_survey() {
+    let missing: Vec<&str> = survey_lamps()
+        .filter(|m| !lamp_glass::LAMP_GLASS.iter().any(|(model, _)| model == m))
+        .collect();
+    assert!(missing.is_empty(), "{} lamps without glass: {missing:?}", missing.len());
+}
+
+#[test]
+fn glass_table_entries_valid() {
+    let mut seen = std::collections::HashSet::new();
+    for (model, glass) in lamp_glass::LAMP_GLASS {
+        assert!(seen.insert(*model), "{model} twice");
+        assert_eq!(*model, model.to_lowercase(), "{model}: keys lowercase");
+        assert!(glow::is_lamp_name(model), "{model} is not a lamp name");
+        // an empty list is a lamp with nothing to light (an empty iron lantern, a brazier with no flame drawn)
+        for g in *glass {
+            let [u0, v0, u1, v1] = g.uv;
+            assert!(0.0 <= u0 && u0 < u1 && u1 <= 1.0, "{model} {}: u {u0}..{u1}", g.texture);
+            assert!(0.0 <= v0 && v0 < v1 && v1 <= 1.0, "{model} {}: v {v0}..{v1}", g.texture);
+            assert_eq!(g.texture, g.texture.to_lowercase(), "{model}: texture lowercase");
+        }
+    }
+}
+
+/// A listed lamp's faces glow where their UV centre falls in one of its rects (any case, either slash), and nowhere
+/// else; a lamp not in the table keeps the mask rule (`None`).
+#[test]
+fn glass_face_by_uv_centre() {
+    let (model, glass) = *lamp_glass::LAMP_GLASS
+        .iter()
+        .find(|(_, glass)| !glass.is_empty())
+        .unwrap();
+    let g = &glass[0];
+    let inside = [(g.uv[0] + g.uv[2]) / 2.0, (g.uv[1] + g.uv[3]) / 2.0];
+    let upper = format!("DATA\\MODEL\\{}", model.to_uppercase());
+    assert_eq!(glow::glass_emissive(&upper, &g.texture.to_uppercase(), inside), Some(glow::EMISSIVE_NAMED));
+    let outside = [if g.uv[0] > 0.01 { 0.0 } else { 1.0 }, if g.uv[1] > 0.01 { 0.0 } else { 1.0 }];
+    let in_any = glass.iter().any(|o| {
+        o.texture == g.texture
+            && (o.uv[0]..=o.uv[2]).contains(&outside[0])
+            && (o.uv[1]..=o.uv[3]).contains(&outside[1])
+    });
+    if !in_any {
+        assert_eq!(glow::glass_emissive(model, g.texture, outside), Some(0.0), "outside the glass");
+    }
+    assert_eq!(glow::glass_emissive(model, "other\\texture.bmp", inside), Some(0.0), "another texture");
+    assert_eq!(glow::glass_emissive("외부소품\\가로등01.rsm", "프론테라\\pron-lamp1.bmp", inside), None);
+    assert_eq!(glow::glass_emissive("프론테라\\주점.rsm", "프론테라\\up.bmp", inside), None);
 }
 
 #[test]

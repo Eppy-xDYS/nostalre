@@ -38,6 +38,7 @@ fn hd_rows_on_graphics_page() {
             Opt::CloudShadows,
             Opt::NightLook,
             Opt::DayCycle,
+            Opt::SunShadows,
             Opt::Grade,
             Opt::Vignette
         ]
@@ -292,4 +293,32 @@ fn day_cycle_row_after_night_look() {
     let mut defaults = values();
     assert!(Opt::DayCycle.reset(&mut v, &mut defaults));
     assert!(v.graphics.hd.day_cycle);
+}
+
+#[test]
+fn sun_shadow_row() {
+    let rows: Vec<Opt> = Page::Graphics
+        .entries()
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Opt(o) => Some(*o),
+            Entry::Section(_) => None,
+        })
+        .collect();
+    let cycle = rows.iter().position(|o| *o == Opt::DayCycle).unwrap();
+    assert_eq!(rows[cycle + 1], Opt::SunShadows, "right after Day cycle");
+    assert_eq!(Opt::SunShadows.label(), "Sun shadows");
+    assert!(!Opt::SunShadows.help().contains("restart"), "live");
+    assert!(Opt::SunShadows.help().contains("0%: off"));
+    let mut v = values();
+    assert!(matches!(Opt::SunShadows.shown_value(&mut v), Shown::Slider(65)));
+    assert!(Opt::SunShadows.change(&mut v, Change::Prev));
+    assert!((v.graphics.hd.sun_shadows - 0.6).abs() < 1e-6);
+    for _ in 0..30 {
+        Opt::SunShadows.change(&mut v, Change::Prev);
+    }
+    assert_eq!(v.graphics.hd.sun_shadows, 0.0);
+    let mut defaults = values();
+    assert!(Opt::SunShadows.reset(&mut v, &mut defaults));
+    assert!((v.graphics.hd.sun_shadows - 0.65).abs() < 1e-6);
 }

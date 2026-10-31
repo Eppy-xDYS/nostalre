@@ -58,6 +58,8 @@ pub struct HdConfig {
     pub night_look: bool,
     /// The sun crosses the sky once an hour, dawn and dusk between day and night
     pub day_cycle: bool,
+    /// Sun shadows: the share of sunlight a shadow takes away, 0 to 1 (0: none)
+    pub sun_shadows: f32,
 }
 
 impl Default for HdConfig {
@@ -76,6 +78,7 @@ impl Default for HdConfig {
             cloud_shadows: 0.6,
             night_look: true,
             day_cycle: true,
+            sun_shadows: 0.65,
         }
     }
 }
@@ -147,6 +150,15 @@ impl HdConfig {
             HdPreset::High | HdPreset::Custom => 16,
             HdPreset::Ultra => 32,
         }
+    }
+
+    pub fn shadow_strength(&self) -> f32 {
+        clamp_or_zero(self.sun_shadows, 1.0)
+    }
+
+    /// Sun shadow quality, 0 (Low: none) to 3 (Ultra).
+    pub fn shadow_tier(&self) -> u8 {
+        self.grass_tier()
     }
 
     /// Lamp, pools, sun, each 0 to 1.

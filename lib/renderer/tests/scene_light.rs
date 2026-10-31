@@ -405,3 +405,34 @@ fn actor_factor_adds_lamps() {
     let dark = scene_light::actor_factor([0.0; 3], [0.0; 3], 1.0, [0.2; 3]);
     assert!(dark.iter().all(|c| c.is_finite()), "no division by a black sky: {dark:?}");
 }
+
+/// A lamp model's light: warm, about 6 cells, at its head.
+#[test]
+fn lamp_lights_from_models() {
+    let top = glam::Vec3::new(300.0, -45.0, 420.0);
+    let l = scene_light::lamp_light(top);
+    assert_eq!(l.position[..3], [300.0, -45.0, 420.0]);
+    assert_eq!(l.color_range[3], scene_light::LAMP_RANGE);
+    assert_eq!(scene_light::LAMP_RANGE, 60.0);
+    let c = scene_light::LAMP_COLOR;
+    assert!(close([l.color_range[0], l.color_range[1], l.color_range[2]], c), "{l:?}");
+    assert!(c[0] >= c[1] && c[1] >= c[2], "warm: {c:?}");
+}
+
+/// The lamps join the map's lights only at night, fading with it; by day the map's own lights alone.
+#[test]
+fn lamp_lights_night_only() {
+    let rsw = [nostalre_renderer::PointLightGpu {
+        position: [0.0; 4],
+        color_range: [0.5, 0.5, 0.5, 40.0],
+    }];
+    let lamps = [scene_light::lamp_light(glam::Vec3::new(10.0, -40.0, 10.0))];
+    let day = scene_light::night_lights(&rsw, &lamps, 0.0);
+    assert_eq!(day.len(), 1, "by day: the map's lights only");
+    let night = scene_light::night_lights(&rsw, &lamps, 1.0);
+    assert_eq!(night.len(), 2);
+    assert_eq!(night[1].color_range, lamps[0].color_range);
+    let dusk = scene_light::night_lights(&rsw, &lamps, 0.5);
+    assert!((dusk[1].color_range[0] - lamps[0].color_range[0] * 0.5).abs() < 1e-6, "fades with the night");
+    assert_eq!(dusk[1].color_range[3], scene_light::LAMP_RANGE, "range kept");
+}

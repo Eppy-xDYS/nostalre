@@ -85,6 +85,16 @@ impl ActorLightmap {
     /// Tint at a fractional GAT position. Sampling follows world position, not
     /// the cell index, so the value changes smoothly as an actor walks.
     pub fn intensity_at_pos(&self, cx: f32, cy: f32) -> [f32; 3] {
+        self.tint_at_pos(cx, cy, false)
+    }
+
+    /// The tint with the baked shadow read as fully lit: while HD sun shadows run, the map's fixed-sun shadow
+    /// steps aside (the baked lamp colour stays).
+    pub fn intensity_lit_at_pos(&self, cx: f32, cy: f32) -> [f32; 3] {
+        self.tint_at_pos(cx, cy, true)
+    }
+
+    fn tint_at_pos(&self, cx: f32, cy: f32, lit: bool) -> [f32; 3] {
         let (ix, iy) = (cx.floor() as i32, cy.floor() as i32);
         if ix < 0 || iy < 0 || ix >= self.gat_width || iy >= self.gat_height {
             return [1.0; 3];
@@ -97,6 +107,7 @@ impl ActorLightmap {
         let tx = cx / 2.0 * CELL_STRIDE as f32;
         let ty = cy / 2.0 * CELL_STRIDE as f32;
         let (shadow, color) = self.sample_bilinear(tx, ty);
+        let shadow = if lit { 255.0 } else { shadow };
 
         let mut out = [0.0f32; 3];
         for c in 0..3 {

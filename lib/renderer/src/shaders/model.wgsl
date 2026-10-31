@@ -151,6 +151,65 @@ fn night_lift(lit: vec3<f32>, surface: vec3<f32>, lm: vec3<f32>) -> vec3<f32> {
     return mix(lit, surface * light.day_light.rgb + lm, k);
 }
 
+// HD sun shadows (shadow.rs): the map seen from the sun, its compare sampler, and strength (night applied), texel,
+// lookups, on (0/1). Off: no lookups, today's look.
+struct ShadowUniforms {
+    light_vp: mat4x4<f32>,
+    params: vec4<f32>,
+};
+
+@group(0) @binding(8) var shadow_map: texture_depth_2d;
+@group(0) @binding(9) var shadow_sampler: sampler_comparison;
+@group(0) @binding(10) var<uniform> shadow: ShadowUniforms;
+
+// How much of the sun `world` loses, 0 to 1 (0 while shadows are off); `taps`: 1 (the sampler's own 2x2 filter),
+// 9 or 25. Fades out over the box's last tenth so its edge never shows.
+fn sun_shadow_taps(world: vec3<f32>, n_dot_l: f32, taps: f32) -> f32 {
+    if (shadow.params.w <= 0.0) {
+        return 0.0;
+    }
+    let c = shadow.light_vp * vec4<f32>(world, 1.0);
+    let p = c.xyz / c.w;
+    let edge = max(abs(p.x), abs(p.y));
+    if (edge >= 1.0 || p.z <= 0.0 || p.z >= 1.0) {
+        return 0.0;
+    }
+    let uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    let depth = p.z - max(0.004 * (1.0 - clamp(n_dot_l, 0.0, 1.0)), 0.001);
+    var lit = 0.0;
+    if (taps < 2.0) {
+        lit = textureSampleCompareLevel(shadow_map, shadow_sampler, uv, depth);
+    } else {
+        let r = select(1, 2, taps > 10.0);
+        let step = 1.0 / vec2<f32>(textureDimensions(shadow_map));
+        var n = 0.0;
+        for (var y = -r; y <= r; y++) {
+            for (var x = -r; x <= r; x++) {
+                let at = uv + vec2<f32>(f32(x), f32(y)) * step;
+                lit += textureSampleCompareLevel(shadow_map, shadow_sampler, at, depth);
+                n += 1.0;
+            }
+        }
+        lit /= n;
+    }
+    return (1.0 - lit) * (1.0 - smoothstep(0.9, 1.0, edge));
+}
+
+fn sun_shadow(world: vec3<f32>, n_dot_l: f32) -> f32 {
+    return sun_shadow_taps(world, n_dot_l, shadow.params.z);
+}
+
+// the sun's part of `total` taken away by shadow `s` at the row's strength; the sky's part stays
+fn shadowed(total: vec3<f32>, ambient: vec3<f32>, s: f32) -> vec3<f32> {
+    let amb = min(total, ambient);
+    return amb + (total - amb) * (1.0 - s * shadow.params.x);
+}
+
+// the map's baked shadow (lightmap alpha, one fixed sun) steps aside while sun shadows run
+fn baked_alpha(a: f32) -> f32 {
+    return select(a, 1.0, shadow.params.w > 0.0);
+}
+
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     let lo = c * 12.92;
     let hi = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
@@ -241,7 +300,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let n_dot_l = max(dot(normalize(in.normal), normalize(light.light_dir.xyz)), 0.0);
     let diffuse = light.diffuse_color.rgb * n_dot_l;
-    let shaded = clamp(diffuse + light.ambient_color.rgb, vec3<f32>(0.0), vec3<f32>(1.0))
+    let sun_lost = sun_shadow(in.world_position, n_dot_l) * (1.0 - in.unlit);
+    let shaded = shadowed(
+        clamp(diffuse + light.ambient_color.rgb, vec3<f32>(0.0), vec3<f32>(1.0)),
+        light.ambient_color.rgb,
+        sun_lost,
+    )
         * in.lit_scale;
     let lighting = mix(shaded, vec3<f32>(1.0), in.unlit);
 
@@ -261,7 +325,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
     color += tex_gamma * lamp_mask(tex_gamma, in.emissive) * light.glow_lamp * LAMP_GAIN;
-    color += sun_extra(color, n_dot_l * in.lit_scale * (1.0 - in.unlit));
+    color += sun_extra(color, n_dot_l * in.lit_scale * (1.0 - in.unlit) * (1.0 - sun_lost));
     color = apply_fog(color, in.view_pos);
 
     return vec4<f32>(color, tex_color.a * in.alpha);

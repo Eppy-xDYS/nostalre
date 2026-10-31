@@ -82,6 +82,7 @@ enum Opt {
     CloudShadows,
     NightLook,
     DayCycle,
+    SunShadows,
     Grade,
     Vignette,
 }
@@ -143,6 +144,7 @@ impl Opt {
             Self::CloudShadows => "Cloud shadows",
             Self::NightLook => "Night look",
             Self::DayCycle => "Day cycle",
+            Self::SunShadows => "Sun shadows",
             Self::Grade => "Colour grade",
             Self::Vignette => "Vignette",
         }
@@ -188,6 +190,7 @@ impl Opt {
             Self::CloudShadows => "Cloud shadows drifting over the land outdoors. 0%: off.",
             Self::NightLook => "A moonlit night outdoors, lamps and a torch around you. Off: the original's.",
             Self::DayCycle => "The sun crosses the sky once an hour: dawn, golden dusk, night. Off: always midday.",
+            Self::SunShadows => "Trees and buildings cast shadows that follow the sun. Not on Low. 0%: off.",
             Self::Grade => "A colour mood per map: warm towns, green fields, cold ruins. 0%: off.",
             Self::Vignette => "Darken the screen's corners a little.",
         }
@@ -205,6 +208,7 @@ impl Opt {
             | Self::SunGlow
             | Self::Grass
             | Self::CloudShadows
+            | Self::SunShadows
             | Self::Grade => None,
             _ => Some("toggle"),
         }
@@ -264,6 +268,7 @@ impl Opt {
             | Self::SunGlow
             | Self::Grass
             | Self::CloudShadows
+            | Self::SunShadows
             | Self::Grade => return None,
         })
     }
@@ -277,6 +282,7 @@ impl Opt {
             Self::SunGlow => Some(&mut v.graphics.hd.sun_glow),
             Self::Grass => Some(&mut v.graphics.hd.grass),
             Self::CloudShadows => Some(&mut v.graphics.hd.cloud_shadows),
+            Self::SunShadows => Some(&mut v.graphics.hd.sun_shadows),
             Self::Grade => Some(&mut v.graphics.hd.grade),
             _ => None,
         }
@@ -525,6 +531,7 @@ impl Page {
                 O(Opt::CloudShadows),
                 O(Opt::NightLook),
                 O(Opt::DayCycle),
+                O(Opt::SunShadows),
                 O(Opt::Grade),
                 O(Opt::Vignette),
             ],

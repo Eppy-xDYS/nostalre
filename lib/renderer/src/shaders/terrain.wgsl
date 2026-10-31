@@ -180,6 +180,65 @@ fn lamps(world: vec3<f32>) -> vec3<f32> {
     return light_knee(sum);
 }
 
+// HD sun shadows (shadow.rs): the map seen from the sun, its compare sampler, and strength (night applied), texel,
+// lookups, on (0/1). Off: no lookups, today's look.
+struct ShadowUniforms {
+    light_vp: mat4x4<f32>,
+    params: vec4<f32>,
+};
+
+@group(0) @binding(8) var shadow_map: texture_depth_2d;
+@group(0) @binding(9) var shadow_sampler: sampler_comparison;
+@group(0) @binding(10) var<uniform> shadow: ShadowUniforms;
+
+// How much of the sun `world` loses, 0 to 1 (0 while shadows are off); `taps`: 1 (the sampler's own 2x2 filter),
+// 9 or 25. Fades out over the box's last tenth so its edge never shows.
+fn sun_shadow_taps(world: vec3<f32>, n_dot_l: f32, taps: f32) -> f32 {
+    if (shadow.params.w <= 0.0) {
+        return 0.0;
+    }
+    let c = shadow.light_vp * vec4<f32>(world, 1.0);
+    let p = c.xyz / c.w;
+    let edge = max(abs(p.x), abs(p.y));
+    if (edge >= 1.0 || p.z <= 0.0 || p.z >= 1.0) {
+        return 0.0;
+    }
+    let uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    let depth = p.z - max(0.004 * (1.0 - clamp(n_dot_l, 0.0, 1.0)), 0.001);
+    var lit = 0.0;
+    if (taps < 2.0) {
+        lit = textureSampleCompareLevel(shadow_map, shadow_sampler, uv, depth);
+    } else {
+        let r = select(1, 2, taps > 10.0);
+        let step = 1.0 / vec2<f32>(textureDimensions(shadow_map));
+        var n = 0.0;
+        for (var y = -r; y <= r; y++) {
+            for (var x = -r; x <= r; x++) {
+                let at = uv + vec2<f32>(f32(x), f32(y)) * step;
+                lit += textureSampleCompareLevel(shadow_map, shadow_sampler, at, depth);
+                n += 1.0;
+            }
+        }
+        lit /= n;
+    }
+    return (1.0 - lit) * (1.0 - smoothstep(0.9, 1.0, edge));
+}
+
+fn sun_shadow(world: vec3<f32>, n_dot_l: f32) -> f32 {
+    return sun_shadow_taps(world, n_dot_l, shadow.params.z);
+}
+
+// the sun's part of `total` taken away by shadow `s` at the row's strength; the sky's part stays
+fn shadowed(total: vec3<f32>, ambient: vec3<f32>, s: f32) -> vec3<f32> {
+    let amb = min(total, ambient);
+    return amb + (total - amb) * (1.0 - s * shadow.params.x);
+}
+
+// the map's baked shadow (lightmap alpha, one fixed sun) steps aside while sun shadows run
+fn baked_alpha(a: f32) -> f32 {
+    return select(a, 1.0, shadow.params.w > 0.0);
+}
+
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     let lo = c * 12.92;
     let hi = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
@@ -291,17 +350,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let normal = normalize(in.normal);
     let n_dot_l = max(dot(normal, normalize(light.light_dir.xyz)), 0.0);
-    let shadow = lightmap.a;
+    let shade = baked_alpha(lightmap.a);
     let tex_gamma = linear_to_srgb(tex_color.rgb);
-    var combined_light = clamp(sunlight * n_dot_l + ambient, vec3<f32>(0.0), vec3<f32>(1.0));
+    let sun_lost = sun_shadow(in.world_position, n_dot_l);
+    var combined_light = shadowed(
+        clamp(sunlight * n_dot_l + ambient, vec3<f32>(0.0), vec3<f32>(1.0)),
+        ambient,
+        sun_lost,
+    );
     var baked = lightmap.rgb;
     var lamp = vec3<f32>(0.0);
     if (light.scene.x > 0.0) {
         // softer bakes, shadows on floors only (up is -y), the map's lamps on the ground
-        combined_light *= baked_shadow(shadow, -normal.y);
+        combined_light *= baked_shadow(shade, -normal.y);
         baked = lightmap_treat(lightmap.rgb);
     } else {
-        combined_light *= shadow;
+        combined_light *= shade;
     }
     if (light.scene.x > 0.0 || light.scene.y > 0.0) {
         lamp = in.color.rgb * tex_gamma * lamps(in.world_position);
@@ -318,12 +382,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // sunlight focused by the waves, where the sun reaches the bed
-    color += sunlight * n_dot_l * shadow * caustics(in.world_position);
+    color += sunlight * n_dot_l * shade * (1.0 - sun_lost) * caustics(in.world_position);
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 
     let pool = max(lightmap.rgb - vec3<f32>(POOL_THRESHOLD), vec3<f32>(0.0)) / (1.0 - POOL_THRESHOLD);
     color += pool * light.glow_pools * POOL_GAIN;
-    color += sun_extra(color, n_dot_l * shadow);
+    color += sun_extra(color, n_dot_l * shade * (1.0 - sun_lost));
 
     color = apply_fog(color, in.view_pos);
 

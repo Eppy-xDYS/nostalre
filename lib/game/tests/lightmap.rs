@@ -84,3 +84,19 @@ fn baked_at_pos_zero_off_map() {
     assert_eq!(lm.baked_at_pos(8.5, 2.0), [0.0; 3]);
     assert_eq!(lm.baked_at_pos(2.0, 99.0), [0.0; 3]);
 }
+
+#[test]
+fn intensity_lit_ignores_shadow() {
+    let (mut gnd, gat) = split_map();
+    for lm in &mut gnd.lightmaps {
+        lm.shadow = [40; 64];
+    }
+    let lm = ActorLightmap::build(&gnd, &gat).unwrap();
+    let shaded = lm.intensity_at_pos(5.5, 5.5);
+    let lit = lm.intensity_lit_at_pos(5.5, 5.5);
+    assert!(lit[0] > shaded[0], "{lit:?} vs {shaded:?}");
+    let (full, gat) = split_map();
+    let full = ActorLightmap::build(&full, &gat).unwrap();
+    assert_eq!(lit, full.intensity_at_pos(5.5, 5.5), "as if the shadow were fully lit");
+    assert_eq!(lm.intensity_lit_at_pos(-1.0, 2.0), [1.0; 3], "off the map");
+}

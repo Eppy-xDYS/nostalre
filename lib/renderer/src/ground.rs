@@ -16,7 +16,7 @@ pub struct GroundVertex {
 }
 
 impl GroundVertex {
-    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GroundVertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &wgpu::vertex_attr_array![
@@ -40,6 +40,8 @@ struct DrawBatch {
 
 pub struct GroundRenderer {
     pipeline: wgpu::RenderPipeline,
+    /// Depth from the sun for HD sun shadows (`shadow`)
+    shadow_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     batches: Vec<DrawBatch>,
@@ -109,9 +111,18 @@ impl GroundRenderer {
             &global_uniforms.bind_group_layout,
             &texture_cache.bind_group_layout,
         );
+        let shadow_pipeline = crate::shadow::caster_pipeline(
+            device,
+            &global_uniforms.shadow_pass_layout,
+            &texture_cache.bind_group_layout,
+            None,
+            GroundVertex::LAYOUT,
+            "vs_ground",
+        );
 
         Self {
             pipeline,
+            shadow_pipeline,
             vertex_buffer,
             index_buffer,
             batches,
@@ -124,6 +135,25 @@ impl GroundRenderer {
 
     pub fn set_lightmap_enabled(&mut self, enabled: bool) {
         self.lightmap_enabled = enabled;
+    }
+
+    /// The ground's depth into the sun-shadow map (`shadow::ShadowMap::begin`).
+    pub fn render_shadow<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        pass_bind_group: &'a wgpu::BindGroup,
+        texture_cache: &'a TextureCache,
+    ) {
+        pass.set_pipeline(&self.shadow_pipeline);
+        pass.set_bind_group(0, pass_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        for batch in &self.batches {
+            if let Some(tex_bg) = texture_cache.get_ground(&batch.texture_name) {
+                pass.set_bind_group(1, tex_bg, &[]);
+                pass.draw_indexed(batch.start_index..batch.start_index + batch.index_count, 0, 0..1);
+            }
+        }
     }
 
     pub fn render<'a>(

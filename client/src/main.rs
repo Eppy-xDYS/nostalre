@@ -831,6 +831,8 @@ impl ApplicationHandler for App {
                 grass: self.config.custom.hd.grass_density(),
                 grass_tier: self.config.custom.hd.grass_tier(),
                 scene: config::Config::hd_scene(&self.config.custom.hd),
+                shadow_strength: self.config.custom.hd.shadow_strength(),
+                shadow_tier: self.config.custom.hd.shadow_tier(),
             },
         ));
         renderer.set_fog_scale(self.config.custom.fog_scale);

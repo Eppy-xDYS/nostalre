@@ -2,6 +2,7 @@
 
 pub mod bloom;
 pub mod glow;
+pub mod lamp_glass;
 pub mod grade;
 
 use bloom::{Bloom, BloomPipelines};
@@ -33,6 +34,9 @@ pub struct HdOptions {
     pub grass_tier: u8,
     /// Scene light rows (lightmaps, lamps, clouds, night)
     pub scene: crate::scene_light::SceneOptions,
+    /// Sun shadow strength 0 to 1, and quality 0 Low to 3 Ultra
+    pub shadow_strength: f32,
+    pub shadow_tier: u8,
 }
 
 /// The adapter can draw into, filter and blend a format with these features.

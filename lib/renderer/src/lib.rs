@@ -21,6 +21,7 @@ pub mod portrait;
 pub mod post;
 pub mod rsm_anim;
 pub mod scene_light;
+pub mod shadow;
 pub mod screen_distortion;
 pub mod sprite;
 pub mod sprite_projection;
@@ -187,6 +188,8 @@ pub struct Renderer {
     effect_behind_dispatcher: effect::EffectDispatcher,
     /// The map's RSW lights; the frame shades with the nearest (global_uniforms::nearest_point_lights)
     point_lights: Vec<PointLightGpu>,
+    /// The map's lamp models' lights, lit at night (`scene_light::night_lights`)
+    lamp_lights: Vec<PointLightGpu>,
     point_light_center: Option<glam::Vec3>,
     pub ui_renderer: UiRenderer,
     pub font_atlas: FontAtlas,
@@ -221,6 +224,17 @@ pub struct Renderer {
     sky_shown: Option<day_cycle::Sky>,
     /// This map has night (`day_cycle::learn_darkens`)
     map_darkens: bool,
+    /// HD sun shadows: the map (while they run), the row's strength, the preset's quality
+    shadow_map: Option<shadow::ShadowMap>,
+    shadow_strength: f32,
+    shadow_tier: Option<shadow::ShadowTier>,
+    /// What the map was last drawn for, its light box, frames since, and a count bumped by map/tier changes
+    shadow_last: Option<shadow::RedrawState>,
+    shadow_vp: glam::Mat4,
+    shadow_frames: u32,
+    shadow_generation: u64,
+    /// The light's direction (toward the sun or moon) last written
+    sun_dir_now: glam::Vec3,
     /// The current map is indoors: no HD night, clouds or torch
     indoor: bool,
     /// HD scene light rows (Settings)
@@ -449,6 +463,7 @@ impl Renderer {
             effect_dispatcher,
             effect_behind_dispatcher,
             point_lights: Vec::new(),
+            lamp_lights: Vec::new(),
             point_light_center: None,
             ui_renderer,
             font_atlas,
@@ -479,6 +494,14 @@ impl Renderer {
             sky_preview: None,
             sky_shown: None,
             map_darkens: true,
+            shadow_map: None,
+            shadow_strength: hd.shadow_strength,
+            shadow_tier: shadow::tier(hd.shadow_tier),
+            shadow_last: None,
+            shadow_vp: glam::Mat4::IDENTITY,
+            shadow_frames: 0,
+            shadow_generation: 0,
+            sun_dir_now: glam::Vec3::NEG_Y,
             indoor: false,
             scene: hd.scene,
             cloud_offset: [0.0; 2],
@@ -683,6 +706,78 @@ impl Renderer {
         self.hd_effects() && !self.indoor && self.scene.night_look
     }
 
+    /// Sun shadow strength 0 to 1 and quality 0 (Low: none) to 3 (Ultra), from Settings, live.
+    pub fn set_hd_shadows(&mut self, strength: f32, tier: u8) {
+        self.shadow_strength = strength;
+        self.shadow_tier = shadow::tier(tier);
+    }
+
+    /// Sun shadows run this frame (the map's baked shadows step aside meanwhile).
+    pub fn sun_shadows_active(&self) -> bool {
+        self.shadow_map.is_some()
+    }
+
+    /// One frame of sun shadows: the map made, kept or dropped by the rows and the map; whether it needs drawing
+    /// again this frame (the light box then written for the caster pass); the receivers' uniform.
+    fn prepare_shadow(&mut self) -> bool {
+        let tier = self.shadow_tier;
+        let on = matches!(self.background_mode, BackgroundMode::RswMap)
+            && shadow::active(self.hd_effects(), self.indoor, self.shadow_strength, tier);
+        let Some(tier) = tier.filter(|_| on) else {
+            if self.shadow_map.take().is_some() {
+                self.global_uniforms
+                    .set_shadow_map(&self.device.device, None);
+                self.global_uniforms
+                    .update_shadow(&self.device.queue, &shadow::ShadowUniform::OFF);
+                self.shadow_last = None;
+            }
+            return false;
+        };
+        if self.shadow_map.as_ref().is_none_or(|map| map.tier != tier) {
+            let map = shadow::ShadowMap::new(
+                &self.device.device,
+                &self.global_uniforms.shadow_pass_layout,
+                tier,
+            );
+            self.global_uniforms
+                .set_shadow_map(&self.device.device, Some(&map.view));
+            self.shadow_map = Some(map);
+            self.shadow_generation += 1;
+        }
+        let now = shadow::RedrawState {
+            center: self.camera.target,
+            dir: self.sun_dir_now,
+            models_ready: self.model_renderer.is_some(),
+            generation: self.shadow_generation,
+        };
+        self.shadow_frames += 1;
+        let animated = self.animated_model_renderer.is_some();
+        let redraw = shadow::needs_redraw(self.shadow_last.as_ref(), &now, self.shadow_frames, animated);
+        if redraw {
+            let light_box = shadow::light_box(now.dir, now.center, tier.size);
+            if let Some(map) = &self.shadow_map {
+                map.write_pass(&self.device.queue, light_box.light_vp);
+            }
+            self.shadow_vp = light_box.light_vp;
+            self.shadow_last = Some(now);
+            self.shadow_frames = 0;
+        }
+        let night = self.night_now();
+        self.global_uniforms.update_shadow(
+            &self.device.queue,
+            &shadow::ShadowUniform {
+                light_vp: self.shadow_vp.to_cols_array_2d(),
+                params: [
+                    self.shadow_strength * (1.0 - 0.6 * night),
+                    2.0 * shadow::HALF_EXTENT / tier.size as f32,
+                    tier.taps as f32,
+                    1.0,
+                ],
+            },
+        );
+        redraw
+    }
+
     /// Where in the hour the wall clock is (0 to 1); the day cycle reads it each frame.
     pub fn set_time_of_day(&mut self, phase: f32) {
         self.clock_phase = phase;
@@ -750,6 +845,7 @@ impl Renderer {
             None => [0.0; 3],
         };
         light.cloud[..2].copy_from_slice(&self.cloud_offset);
+        self.sun_dir_now = glam::Vec3::from_slice(&light.light_dir[..3]);
         self.global_uniforms
             .update_light(&self.device.queue, &light);
         let sprite_light = if self.hd_night() {
@@ -882,6 +978,7 @@ impl Renderer {
         };
         self.sky_shown = None;
         self.map_darkens = true;
+        self.shadow_generation += 1;
         if let Some(diffuse) = rsw.light.diffuse {
             light.diffuse_color = [diffuse[0], diffuse[1], diffuse[2], 1.0];
         }
@@ -958,6 +1055,9 @@ impl Renderer {
         self.model_renderer = props.static_models;
         self.animated_model_renderer = props.animated_models;
         self.model_floor_cells = props.floor_cells;
+        self.lamp_lights = props.lamp_heads.into_iter().map(scene_light::lamp_light).collect();
+        tracing::info!("{} lamp models light the night", self.lamp_lights.len());
+        self.point_light_center = None;
 
         self.water_renderer = WaterRenderer::from_water_settings(
             &rsw.water,
@@ -1273,6 +1373,7 @@ impl Renderer {
         self.global_uniforms
             .update_camera(&self.device.queue, &self.camera);
         self.update_sky(delta);
+        let draw_shadow = self.prepare_shadow();
         // the lights nearest the camera, again when it moved half a cell or the torch fades
         let center = self.camera.target;
         let torch_night = if self.hd_night() { self.night_now() } else { 0.0 };
@@ -1282,7 +1383,8 @@ impl Renderer {
             || torch_night != self.point_light_torch
         {
             let torch = scene_light::torch(center, torch_night, !self.indoor);
-            let nearest = global_uniforms::nearest_point_lights(&self.point_lights, center, torch);
+            let lights = scene_light::night_lights(&self.point_lights, &self.lamp_lights, torch_night);
+            let nearest = global_uniforms::nearest_point_lights(&lights, center, torch);
             self.global_uniforms
                 .update_point_lights(&self.device.queue, &nearest);
             self.point_light_center = Some(center);
@@ -1337,6 +1439,20 @@ impl Renderer {
             .device
             .device
             .create_command_encoder(&Default::default());
+
+        if draw_shadow && let Some(map) = &self.shadow_map {
+            nostalre_profiling::profile_scope!("sun-shadow");
+            let mut pass = map.begin(&mut encoder);
+            if let Some(ground) = &self.ground_renderer {
+                ground.render_shadow(&mut pass, &map.pass_bind_group, &self.texture_cache);
+            }
+            if let Some(model) = &self.model_renderer {
+                model.render_shadow(&mut pass, &map.pass_bind_group, &self.texture_cache);
+            }
+            if let Some(animated) = &self.animated_model_renderer {
+                animated.render_shadow(&mut pass, &map.pass_bind_group, &self.texture_cache);
+            }
+        }
 
         {
             nostalre_profiling::profile_scope!("scene-opaque");

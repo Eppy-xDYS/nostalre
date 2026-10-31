@@ -72,7 +72,14 @@ impl App {
             .actor_lightmap
             .as_ref()
             .filter(|_| renderer.lightmap_enabled());
-        let tint = lightmap.map_or([1.0; 3], |lm| lm.intensity_at_pos(cell.0, cell.1));
+        // while sun shadows run, the map's baked (fixed-sun) shadow steps aside, as on the ground
+        let tint = lightmap.map_or([1.0; 3], |lm| {
+            if renderer.sun_shadows_active() {
+                lm.intensity_lit_at_pos(cell.0, cell.1)
+            } else {
+                lm.intensity_at_pos(cell.0, cell.1)
+            }
+        });
         let (Some(gat), Some(coords)) = (&self.game.session.gat, &self.game.session.map_coords) else {
             return tint;
         };

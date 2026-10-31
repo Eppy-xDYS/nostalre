@@ -37,7 +37,7 @@ impl Default for LightUniform {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PointLightGpu {
     pub position: [f32; 4],
     pub color_range: [f32; 4],
@@ -148,6 +148,12 @@ pub struct GlobalUniforms {
     cell_light_sampler: wgpu::Sampler,
     cell_light: CellLightUniform,
     cell_light_available: bool,
+    /// HD sun shadows (`shadow`): the map (a 1×1 stand-in while off), its compare sampler and the receivers' uniform
+    shadow_view: wgpu::TextureView,
+    shadow_sampler: wgpu::Sampler,
+    shadow_buffer: wgpu::Buffer,
+    /// The caster pass's group 0 (the map can't be bound while it is drawn into)
+    pub shadow_pass_layout: wgpu::BindGroupLayout,
 }
 
 impl GlobalUniforms {
@@ -206,9 +212,53 @@ impl GlobalUniforms {
             ..Default::default()
         });
 
+        let shadow_view = crate::shadow::depth_texture(device, 1).create_view(&Default::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let shadow_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("shadow_uniform"),
+            contents: bytemuck::bytes_of(&crate::shadow::ShadowUniform::OFF),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let shadow_pass_layout = crate::shadow::pass_layout(device);
+
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("global_uniforms"),
             entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
@@ -299,6 +349,7 @@ impl GlobalUniforms {
             &cell_light_sampler,
             &cell_light_buffer,
             &water_buffer,
+            (&shadow_view, &shadow_sampler, &shadow_buffer),
         );
 
         Self {
@@ -314,6 +365,10 @@ impl GlobalUniforms {
             cell_light_sampler,
             cell_light,
             cell_light_available: false,
+            shadow_view,
+            shadow_sampler,
+            shadow_buffer,
+            shadow_pass_layout,
         }
     }
 
@@ -329,7 +384,21 @@ impl GlobalUniforms {
             &self.cell_light_sampler,
             &self.cell_light_buffer,
             &self.water_buffer,
+            (&self.shadow_view, &self.shadow_sampler, &self.shadow_buffer),
         );
+    }
+
+    /// The shadow map the receivers sample; `None`: the 1×1 stand-in (shadows off).
+    pub fn set_shadow_map(&mut self, device: &wgpu::Device, view: Option<&wgpu::TextureView>) {
+        self.shadow_view = match view {
+            Some(view) => view.clone(),
+            None => crate::shadow::depth_texture(device, 1).create_view(&Default::default()),
+        };
+        self.rebuild_bind_group(device);
+    }
+
+    pub fn update_shadow(&self, queue: &wgpu::Queue, shadow: &crate::shadow::ShadowUniform) {
+        queue.write_buffer(&self.shadow_buffer, 0, bytemuck::bytes_of(shadow));
     }
 
     /// Uploads a map's per-cell light texture, or clears it when the map has no
@@ -439,6 +508,7 @@ fn build_bind_group(
     cell_light_sampler: &wgpu::Sampler,
     cell_light_buffer: &wgpu::Buffer,
     water_buffer: &wgpu::Buffer,
+    (shadow_view, shadow_sampler, shadow_buffer): (&wgpu::TextureView, &wgpu::Sampler, &wgpu::Buffer),
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("global_uniforms"),
@@ -475,6 +545,18 @@ fn build_bind_group(
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: water_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::TextureView(shadow_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: wgpu::BindingResource::Sampler(shadow_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 10,
+                resource: shadow_buffer.as_entire_binding(),
             },
         ],
     })
