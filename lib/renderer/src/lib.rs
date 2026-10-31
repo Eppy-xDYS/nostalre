@@ -1,5 +1,6 @@
 pub mod camera;
 pub mod damage_number;
+pub mod day_cycle;
 mod device;
 pub mod effect;
 pub mod effect_sprite;
@@ -209,6 +210,17 @@ pub struct Renderer {
     legacy_sprite_light: [f32; 3],
     /// 0 day to 1 night, for the HD night
     night: f32,
+    /// The server says it is night (status 160)
+    server_night: bool,
+    /// The map's own sun (RSW angles), the day cycle's noon
+    map_sun: day_cycle::SunAngles,
+    /// Where in the hour the wall clock is (0 to 1), and a `/sky` preview over it
+    clock_phase: f32,
+    sky_preview: Option<f32>,
+    /// The sky on screen, eased toward the clock's; `None` until the cycle runs on this map
+    sky_shown: Option<day_cycle::Sky>,
+    /// This map has night (`day_cycle::learn_darkens`)
+    map_darkens: bool,
     /// The current map is indoors: no HD night, clouds or torch
     indoor: bool,
     /// HD scene light rows (Settings)
@@ -458,6 +470,15 @@ impl Renderer {
             legacy_diffuse: [1.0; 3],
             legacy_sprite_light: [1.0; 3],
             night: 0.0,
+            server_night: false,
+            map_sun: day_cycle::SunAngles {
+                longitude: 0.0,
+                latitude: 0.0,
+            },
+            clock_phase: 0.0,
+            sky_preview: None,
+            sky_shown: None,
+            map_darkens: true,
             indoor: false,
             scene: hd.scene,
             cloud_offset: [0.0; 2],
@@ -486,10 +507,11 @@ impl Renderer {
 
     /// Today's day/night fade (`diffuse`, the sprites' `sprite_light`) and how far into the night it is (0 to 1)
     /// for the HD night, which replaces the fade while it runs.
-    pub fn set_day_night(&mut self, diffuse: [f32; 3], sprite_light: [f32; 3], night: f32) {
+    pub fn set_day_night(&mut self, diffuse: [f32; 3], sprite_light: [f32; 3], night: f32, server_night: bool) {
         self.legacy_diffuse = diffuse;
         self.legacy_sprite_light = sprite_light;
         self.night = night;
+        self.server_night = server_night;
         self.refresh_light();
     }
 
@@ -661,14 +683,64 @@ impl Renderer {
         self.hd_effects() && !self.indoor && self.scene.night_look
     }
 
+    /// Where in the hour the wall clock is (0 to 1); the day cycle reads it each frame.
+    pub fn set_time_of_day(&mut self, phase: f32) {
+        self.clock_phase = phase;
+    }
+
+    /// `/sky`: show this point of the hour (0 to 1) instead of the clock's, this session; `None`: the clock.
+    pub fn set_sky_preview(&mut self, phase: Option<f32>) {
+        self.sky_preview = phase;
+    }
+
+    /// The sky drives the light now (HD effects, outdoors, Day cycle row).
+    fn sky_now(&self) -> Option<&day_cycle::Sky> {
+        day_cycle::active(self.hd_effects(), self.indoor, &self.scene)
+            .then_some(self.sky_shown.as_ref())
+            .flatten()
+    }
+
+    /// How far into the night the HD night is: the day cycle's while it runs, else the server's fade.
+    fn night_now(&self) -> f32 {
+        self.sky_now().map_or(self.night, |sky| sky.night)
+    }
+
+    /// One frame of the day cycle: the sky eases toward the clock's (or `/sky`'s) and the light follows.
+    fn update_sky(&mut self, delta: f32) {
+        if !day_cycle::active(self.hd_effects(), self.indoor, &self.scene) {
+            if self.sky_shown.take().is_some() {
+                self.refresh_light();
+            }
+            return;
+        }
+        self.map_darkens = day_cycle::learn_darkens(self.map_darkens, self.clock_phase, self.server_night);
+        let phase = self.sky_preview.unwrap_or(self.clock_phase);
+        let target = day_cycle::sky(phase, self.server_night, self.map_darkens, self.map_sun);
+        let shown = match self.sky_shown {
+            Some(shown) => shown.ease(&target, delta.clamp(0.0, 0.25)),
+            None => target,
+        };
+        if self.sky_shown != Some(shown) {
+            self.sky_shown = Some(shown);
+            self.refresh_light();
+        }
+    }
+
     /// Writes the world light (day/night, HD scene light, the glow levels bloom can show now) and the
     /// sprites' light.
     fn refresh_light(&mut self) {
         let day = self.day_light();
+        let (lit, legacy_diffuse) = match self.sky_now() {
+            Some(sky) => (
+                day_cycle::apply(&day, sky),
+                std::array::from_fn(|i| self.legacy_diffuse[i] * sky.sun_tint[i]),
+            ),
+            None => (day, self.legacy_diffuse),
+        };
         let mut light = scene_light::frame_light(
-            &day,
-            self.legacy_diffuse,
-            self.night,
+            &lit,
+            legacy_diffuse,
+            self.night_now(),
             self.hd_effects(),
             self.indoor,
             &self.scene,
@@ -804,6 +876,12 @@ impl Renderer {
             .normalize();
             light.light_dir = [dir.x, dir.y, dir.z, 0.0];
         }
+        self.map_sun = day_cycle::SunAngles {
+            longitude: rsw.light.longitude.unwrap_or(0) as f32,
+            latitude: rsw.light.latitude.unwrap_or(0) as f32,
+        };
+        self.sky_shown = None;
+        self.map_darkens = true;
         if let Some(diffuse) = rsw.light.diffuse {
             light.diffuse_color = [diffuse[0], diffuse[1], diffuse[2], 1.0];
         }
@@ -1194,9 +1272,10 @@ impl Renderer {
 
         self.global_uniforms
             .update_camera(&self.device.queue, &self.camera);
+        self.update_sky(delta);
         // the lights nearest the camera, again when it moved half a cell or the torch fades
         let center = self.camera.target;
-        let torch_night = if self.hd_night() { self.night } else { 0.0 };
+        let torch_night = if self.hd_night() { self.night_now() } else { 0.0 };
         if self
             .point_light_center
             .is_none_or(|c| c.distance(center) > 5.0)

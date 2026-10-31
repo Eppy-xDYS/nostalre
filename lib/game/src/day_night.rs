@@ -79,6 +79,11 @@ impl DayNightState {
         std::mem::take(&mut self.dirty)
     }
 
+    /// The server says it is night (status 160).
+    pub fn is_night(&self) -> bool {
+        self.night
+    }
+
     /// How far into the night (0 day, 1 night), fading over 3 s.
     pub fn night_amount(&self) -> f32 {
         self.amount

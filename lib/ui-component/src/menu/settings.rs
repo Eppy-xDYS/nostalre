@@ -81,6 +81,7 @@ enum Opt {
     SceneLight,
     CloudShadows,
     NightLook,
+    DayCycle,
     Grade,
     Vignette,
 }
@@ -141,6 +142,7 @@ impl Opt {
             Self::SceneLight => "Scene light",
             Self::CloudShadows => "Cloud shadows",
             Self::NightLook => "Night look",
+            Self::DayCycle => "Day cycle",
             Self::Grade => "Colour grade",
             Self::Vignette => "Vignette",
         }
@@ -185,6 +187,7 @@ impl Opt {
             Self::SceneLight => "Softer baked light and shadows; street lamps light the ground.",
             Self::CloudShadows => "Cloud shadows drifting over the land outdoors. 0%: off.",
             Self::NightLook => "A moonlit night outdoors, lamps and a torch around you. Off: the original's.",
+            Self::DayCycle => "The sun crosses the sky once an hour: dawn, golden dusk, night. Off: always midday.",
             Self::Grade => "A colour mood per map: warm towns, green fields, cold ruins. 0%: off.",
             Self::Vignette => "Darken the screen's corners a little.",
         }
@@ -249,6 +252,7 @@ impl Opt {
             Self::Vignette => &mut g.hd.vignette,
             Self::SceneLight => &mut g.hd.scene_light,
             Self::NightLook => &mut g.hd.night_look,
+            Self::DayCycle => &mut g.hd.day_cycle,
             Self::Scale
             | Self::Hud
             | Self::Music
@@ -520,6 +524,7 @@ impl Page {
                 O(Opt::SceneLight),
                 O(Opt::CloudShadows),
                 O(Opt::NightLook),
+                O(Opt::DayCycle),
                 O(Opt::Grade),
                 O(Opt::Vignette),
             ],

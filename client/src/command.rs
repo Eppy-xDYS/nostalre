@@ -349,6 +349,22 @@ impl App {
                 };
                 self.windows.chat_window.add_system(message);
             }
+            ChatCommand::Sky(at) => {
+                if let Some(renderer) = &mut self.renderer {
+                    let cycle = nostalre_renderer::day_cycle::CYCLE_MS as f32 / 1000.0;
+                    renderer.set_sky_preview(at.map(|secs| secs as f32 / cycle));
+                }
+                let message = match at {
+                    Some(secs) => format!("Sky: minute {}:{:02} of the hour (this session)", secs / 60, secs % 60),
+                    None => "Sky: following the clock".to_string(),
+                };
+                self.windows.chat_window.add_system(message);
+            }
+            ChatCommand::SkyUsage => {
+                self.windows
+                    .chat_window
+                    .add_system("Usage: /sky MM:SS (minute of the hour, 00:00-59:59) or /sky off".to_string());
+            }
             ChatCommand::ToggleHdWater => {
                 if let Some(renderer) = &mut self.renderer {
                     let enabled = renderer.toggle_hd_water();

@@ -32,6 +32,7 @@ fn hd_options() -> SceneOptions {
         night_look: true,
         clouds: 0.6,
         light_cap: 16,
+        day_cycle: true,
     }
 }
 

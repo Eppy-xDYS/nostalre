@@ -26,6 +26,9 @@ pub enum ChatCommand {
     ToggleEffect,
     ToggleFog,
     ToggleHd,
+    /// `/sky MM:SS`: show that minute of the hour's day cycle (seconds into the hour); `/sky off`: the clock again
+    Sky(Option<u32>),
+    SkyUsage,
     ToggleHdWater,
     ToggleLightmap,
     ToggleAura,
@@ -160,6 +163,7 @@ pub const COMMAND_HELP: &[(&str, &str)] = &[
     ("/fog", "Turns fog on and off."),
     ("/lightmap", "Turns ground lightmaps on and off."),
     ("/hdwater", "Switches between HD and classic water."),
+    ("/sky <MM:SS|off>", "Previews that minute of the hour's HD day cycle (off: the clock)."),
     ("/aura", "Minimizes level 99 aura effects."),
     ("/bgm", "Turns background music on and off."),
     ("/sound", "Turns sound effects on and off."),
@@ -223,6 +227,20 @@ const STAT_ID_INT: u16 = 16;
 const STAT_ID_DEX: u16 = 17;
 const STAT_ID_LUK: u16 = 18;
 
+/// `MM:SS` within the hour (minutes 0-59) or `off`.
+fn parse_sky(args: &str) -> ChatCommand {
+    if args.eq_ignore_ascii_case("off") {
+        return ChatCommand::Sky(None);
+    }
+    let Some((m, s)) = args.split_once(':') else {
+        return ChatCommand::SkyUsage;
+    };
+    match (m.parse::<u32>(), s.parse::<u32>()) {
+        (Ok(m), Ok(s)) if m < 60 && s < 60 => ChatCommand::Sky(Some(m * 60 + s)),
+        _ => ChatCommand::SkyUsage,
+    }
+}
+
 fn parse_volume(args: &str) -> Option<u8> {
     args.parse::<u8>().ok().map(|v| v.min(127))
 }
@@ -276,6 +294,7 @@ pub fn parse_chat_command(input: &str) -> ChatCommand {
         "/fog" => ChatCommand::ToggleFog,
         "/lightmap" => ChatCommand::ToggleLightmap,
         "/hd" => ChatCommand::ToggleHd,
+        "/sky" => parse_sky(args),
         "/hdwater" => ChatCommand::ToggleHdWater,
         "/aura" => ChatCommand::ToggleAura,
         "/notrade" | "/nt" => ChatCommand::ToggleNoTrade,

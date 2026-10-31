@@ -268,3 +268,30 @@ fn scene_rows_are_live() {
     assert!(!hd::needs_restart(&on, &off, true));
     assert!(!hd::needs_restart(&off, &on, true));
 }
+
+#[test]
+fn day_cycle_default_on() {
+    assert!(HdConfig::default().day_cycle);
+    let old: HdConfig = serde_json::from_str(r#"{"enabled": true, "night_look": false}"#).unwrap();
+    assert!(old.day_cycle, "a config from before S6 gets the cycle");
+    let on = HdConfig {
+        enabled: true,
+        ..HdConfig::default()
+    };
+    let off = HdConfig {
+        day_cycle: false,
+        ..on.clone()
+    };
+    assert!(!hd::needs_restart(&on, &off, true), "live");
+}
+
+#[test]
+fn sky_parses() {
+    assert_eq!(parse_chat_command("/sky 42:00"), ChatCommand::Sky(Some(42 * 60)));
+    assert_eq!(parse_chat_command("/sky 2:30"), ChatCommand::Sky(Some(150)));
+    assert_eq!(parse_chat_command("/sky 0:00"), ChatCommand::Sky(Some(0)));
+    assert_eq!(parse_chat_command("/sky off"), ChatCommand::Sky(None));
+    for bad in ["/sky", "/sky 60:00", "/sky 12:60", "/sky noon", "/sky -1:00", "/sky 12"] {
+        assert_eq!(parse_chat_command(bad), ChatCommand::SkyUsage, "{bad}");
+    }
+}

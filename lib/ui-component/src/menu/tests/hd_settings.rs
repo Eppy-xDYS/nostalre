@@ -37,6 +37,7 @@ fn hd_rows_on_graphics_page() {
             Opt::SceneLight,
             Opt::CloudShadows,
             Opt::NightLook,
+            Opt::DayCycle,
             Opt::Grade,
             Opt::Vignette
         ]
@@ -268,4 +269,27 @@ fn cloud_slider() {
     assert!((v.graphics.hd.cloud_shadows - 0.6).abs() < 1e-6);
     assert!(Opt::CloudShadows.help().contains("0%: off"));
     assert_eq!(Opt::CloudShadows.verb(), None);
+}
+
+#[test]
+fn day_cycle_row_after_night_look() {
+    let rows: Vec<Opt> = Page::Graphics
+        .entries()
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Opt(o) => Some(*o),
+            Entry::Section(_) => None,
+        })
+        .collect();
+    let night = rows.iter().position(|o| *o == Opt::NightLook).unwrap();
+    assert_eq!(rows[night + 1], Opt::DayCycle, "right after Night look");
+    assert_eq!(Opt::DayCycle.label(), "Day cycle");
+    assert!(!Opt::DayCycle.help().contains("restart"), "live");
+    let mut v = values();
+    assert!(matches!(Opt::DayCycle.shown_value(&mut v), Shown::Toggle(true)));
+    assert!(Opt::DayCycle.change(&mut v, Change::Flip));
+    assert!(!v.graphics.hd.day_cycle);
+    let mut defaults = values();
+    assert!(Opt::DayCycle.reset(&mut v, &mut defaults));
+    assert!(v.graphics.hd.day_cycle);
 }

@@ -56,6 +56,8 @@ pub struct HdConfig {
     pub cloud_shadows: f32,
     /// Moonlit night outdoors (off: the original's mild dimming)
     pub night_look: bool,
+    /// The sun crosses the sky once an hour, dawn and dusk between day and night
+    pub day_cycle: bool,
 }
 
 impl Default for HdConfig {
@@ -73,6 +75,7 @@ impl Default for HdConfig {
             scene_light: true,
             cloud_shadows: 0.6,
             night_look: true,
+            day_cycle: true,
         }
     }
 }

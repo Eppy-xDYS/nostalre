@@ -40,6 +40,8 @@ pub struct SceneOptions {
     pub clouds: f32,
     /// Lamps the terrain shades with (by quality preset)
     pub light_cap: u32,
+    /// The sun crosses the sky once an hour (`day_cycle`)
+    pub day_cycle: bool,
 }
 
 impl Default for SceneOptions {
@@ -49,6 +51,7 @@ impl Default for SceneOptions {
             night_look: true,
             clouds: 0.6,
             light_cap: 16,
+            day_cycle: true,
         }
     }
 }

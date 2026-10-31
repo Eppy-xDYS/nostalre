@@ -576,6 +576,7 @@ impl Config {
             night_look: hd.night_look,
             clouds: hd.cloud_strength(),
             light_cap: hd.terrain_light_cap(),
+            day_cycle: hd.day_cycle,
         }
     }
 
