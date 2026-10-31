@@ -65,6 +65,9 @@ pub struct CustomConfig {
     pub sound: CustomSoundConfig,
     pub window: CustomWindowConfig,
     pub skill: CustomSkillConfig,
+    /// HD graphics (bloom, grade, grass, shadows...). Off by default; `enabled` applies on the next start.
+    #[serde(deserialize_with = "nostalre_game::hd::deserialize_lenient")]
+    pub hd: nostalre_game::hd::HdConfig,
 }
 
 impl Default for CustomConfig {
@@ -79,6 +82,7 @@ impl Default for CustomConfig {
             sound: CustomSoundConfig::default(),
             window: CustomWindowConfig::default(),
             skill: CustomSkillConfig::default(),
+            hd: Default::default(),
         }
     }
 }
@@ -580,6 +584,7 @@ impl Config {
             filter_effects: self.custom.filtering.effects,
             filter_sprites: self.custom.filtering.sprites,
             sprite_upscale: self.custom.filtering.sprite_upscale,
+            hd: self.custom.hd.clone(),
         }
     }
 
@@ -754,6 +759,30 @@ mod tests {
                 .weapon_aura_for("Aurablade")
                 .is_none()
         );
+    }
+
+    /// Settings shows `custom.hd` as it is saved, and what it applies saves back the same
+    #[test]
+    fn hd_settings_apply() {
+        let mut config = Config::default();
+        config.custom.hd.enabled = true;
+        config.custom.hd.bloom = 0.35;
+        let shown = config.graphics().hd;
+        assert_eq!(shown, config.custom.hd);
+        let json = serde_json::to_string(&config).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.graphics().hd, shown);
+    }
+
+    /// A bad `custom.hd` costs only the HD settings, not the user's whole config
+    #[test]
+    fn a_bad_hd_block_keeps_the_rest_of_the_config() {
+        let config: Config = serde_json::from_str(
+            r#"{"custom": {"fog_scale": 2.0, "hd": {"enabled": "yes"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(config.custom.fog_scale, 2.0);
+        assert!(!config.custom.hd.enabled);
     }
 
     #[test]

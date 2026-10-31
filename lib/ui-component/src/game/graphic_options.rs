@@ -505,6 +505,7 @@ mod tests {
             filter_effects: true,
             filter_sprites: true,
             sprite_upscale: false,
+            hd: Default::default(),
         });
         assert_eq!(win.selected_ui_scale, 1, "100% is the second option");
         win.toggle();
@@ -573,6 +574,7 @@ mod tests {
             filter_effects: true,
             filter_sprites: true,
             sprite_upscale: false,
+            hd: Default::default(),
         });
         win.toggle();
         let mut state = StateCache::new();
@@ -616,6 +618,7 @@ mod tests {
             filter_effects: true,
             filter_sprites: true,
             sprite_upscale: false,
+            hd: Default::default(),
         });
         win.toggle();
         let mut state = StateCache::new();
@@ -659,6 +662,7 @@ mod tests {
             filter_effects: true,
             filter_sprites: true,
             sprite_upscale: false,
+            hd: Default::default(),
         });
         win.toggle();
         let mut state = StateCache::new();
@@ -708,6 +712,7 @@ mod tests {
             filter_effects: true,
             filter_sprites: true,
             sprite_upscale: false,
+            hd: Default::default(),
         });
         win.toggle();
         let mut state = StateCache::new();
@@ -757,6 +762,7 @@ mod tests {
             filter_effects: true,
             filter_sprites: true,
             sprite_upscale: false,
+            hd: Default::default(),
         });
         win.toggle();
         let mut state = StateCache::new();

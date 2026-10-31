@@ -345,6 +345,31 @@ fn format_from_extension(name: &str) -> Option<image::ImageFormat> {
     }
 }
 
+/// An optional picture (PNG, BMP…) as is: none, without a warning, when the file is not there.
+pub fn optional_picture(name: &str, grf: &GrfArchive) -> Option<image::RgbaImage> {
+    let data = grf.read_file(name).ok()?;
+    match image::load_from_memory(&data) {
+        Ok(img) => Some(img.to_rgba8()),
+        Err(e) => {
+            tracing::warn!("{name} is not a picture: {e}");
+            None
+        }
+    }
+}
+
+/// The texture's average colour (0 to 1) over its opaque texels, as stored (gamma encoded).
+pub fn average_color(name: &str, grf: &GrfArchive) -> Option<[f32; 3]> {
+    let img = decode_texture(name, grf)?;
+    let (mut sum, mut n) = ([0.0f64; 3], 0u64);
+    for p in img.pixels().filter(|p| p[3] > 127) {
+        for (s, c) in sum.iter_mut().zip(p.0) {
+            *s += c as f64;
+        }
+        n += 1;
+    }
+    (n > 0).then(|| sum.map(|s| (s / n as f64 / 255.0) as f32))
+}
+
 fn decode_texture(name: &str, grf: &GrfArchive) -> Option<image::RgbaImage> {
     let data = match grf.read_file(name) {
         Ok(d) => d,

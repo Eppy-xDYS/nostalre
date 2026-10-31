@@ -10,6 +10,9 @@ struct LightUniforms {
     diffuse_color: vec4<f32>,
     ambient_color: vec4<f32>,
     shadow_strength: f32,
+    glow_lamp: f32,
+    glow_pools: f32,
+    glow_sun: f32,
 };
 
 struct PointLight {
@@ -54,6 +57,31 @@ fn cell_light_at(world_pos: vec3<f32>) -> vec3<f32> {
         return vec3<f32>(0.0);
     }
     return textureSample(cell_light_texture, cell_light_sampler, uv).rgb;
+}
+
+// HD world glow, twins of post/glow.rs: a bounded extra above white for the bloom; the levels are 0 without bloom.
+const LAMP_GAIN: f32 = 1.5;
+const SUN_GAIN: f32 = 0.5;
+const SUN_KNEE: f32 = 0.8;
+
+// emissive 1: the texture is named for a lamp; 0.5: only its model is, so only near-white texels glow
+fn lamp_mask(c: vec3<f32>, emissive: f32) -> f32 {
+    let peak = max(c.r, max(c.g, c.b));
+    if (emissive > 0.75) {
+        return smoothstep(0.55, 0.85, peak);
+    }
+    if (emissive > 0.25) {
+        return smoothstep(0.8, 0.95, peak);
+    }
+    return 0.0;
+}
+
+// sunlit highlights, near-white colours only: `sun_lit` is how directly the sun falls (0 to 1), scaled by the
+// sun's brightness
+fn sun_extra(color: vec3<f32>, sun_lit: f32) -> vec3<f32> {
+    let sun = dot(light.diffuse_color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let near_white = smoothstep(SUN_KNEE, 1.0, max(color.r, max(color.g, color.b)));
+    return color * near_white * sun_lit * sun * light.glow_sun * SUN_GAIN;
 }
 
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
@@ -105,6 +133,7 @@ struct VertexInput {
     @location(3) alpha: f32,
     @location(4) lit_scale: f32,
     @location(5) unlit: f32,
+    @location(6) emissive: f32,
 };
 
 struct VertexOutput {
@@ -116,6 +145,7 @@ struct VertexOutput {
     @location(4) view_pos: vec3<f32>,
     @location(5) lit_scale: f32,
     @location(6) unlit: f32,
+    @location(7) emissive: f32,
 };
 
 @vertex
@@ -128,6 +158,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.world_position = in.position;
     out.lit_scale = in.lit_scale;
     out.unlit = in.unlit;
+    out.emissive = in.emissive;
     let view_pos = camera.view * vec4<f32>(in.position, 1.0);
     out.view_pos = view_pos.xyz;
     return out;
@@ -152,7 +183,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let pl = point_light_contribution(in.world_position, normalize(in.normal));
     color += tex_gamma * pl;
 
-    color = apply_fog(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), in.view_pos);
+    color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    color += tex_gamma * lamp_mask(tex_gamma, in.emissive) * light.glow_lamp * LAMP_GAIN;
+    color += sun_extra(color, n_dot_l * in.lit_scale * (1.0 - in.unlit));
+    color = apply_fog(color, in.view_pos);
 
     return vec4<f32>(color, tex_color.a * in.alpha);
 }

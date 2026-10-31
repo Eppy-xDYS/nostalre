@@ -51,6 +51,7 @@ pub struct GraphicsSettings {
     pub filter_effects: bool,
     pub filter_sprites: bool,
     pub sprite_upscale: bool,
+    pub hd: crate::hd::HdConfig,
 }
 
 /// The sound options changed together: the classic Sound window, the menu's Settings

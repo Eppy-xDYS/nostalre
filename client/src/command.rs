@@ -330,6 +330,25 @@ impl App {
                         .add_system(format!("Lightmap: {status}"));
                 }
             }
+            ChatCommand::ToggleHd => {
+                // a quick before/after for this session; Settings keeps the choice
+                let toggled = self.renderer.as_mut().and_then(|renderer| {
+                    let on = nostalre_game::hd::session_toggle(
+                        renderer.hd_running(),
+                        renderer.hd_effects(),
+                    )?;
+                    renderer.set_hd_effects(on);
+                    Some(on)
+                });
+                let message = match toggled {
+                    Some(on) => format!(
+                        "HD effects: {} (this session)",
+                        if on { "ON" } else { "OFF" }
+                    ),
+                    None => "HD is off: turn it on in Settings, Graphics".to_string(),
+                };
+                self.windows.chat_window.add_system(message);
+            }
             ChatCommand::ToggleHdWater => {
                 if let Some(renderer) = &mut self.renderer {
                     let enabled = renderer.toggle_hd_water();

@@ -10,6 +10,9 @@ struct LightUniforms {
     diffuse_color: vec4<f32>,
     ambient_color: vec4<f32>,
     shadow_strength: f32,
+    glow_lamp: f32,
+    glow_pools: f32,
+    glow_sun: f32,
 };
 
 struct FogUniforms {
@@ -35,6 +38,20 @@ struct WaterGlobals {
 @group(1) @binding(1) var ground_sampler: sampler;
 @group(2) @binding(0) var lightmap_texture: texture_2d<f32>;
 @group(2) @binding(1) var lightmap_sampler: sampler;
+
+// HD world glow, twins of post/glow.rs: a bounded extra above white for the bloom; the levels are 0 without bloom.
+const POOL_THRESHOLD: f32 = 0.16;
+const POOL_GAIN: f32 = 0.6;
+const SUN_GAIN: f32 = 0.5;
+const SUN_KNEE: f32 = 0.8;
+
+// sunlit highlights, near-white colours only: `sun_lit` is how directly the sun falls (0 to 1), scaled by the
+// sun's brightness
+fn sun_extra(color: vec3<f32>, sun_lit: f32) -> vec3<f32> {
+    let sun = dot(light.diffuse_color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let near_white = smoothstep(SUN_KNEE, 1.0, max(color.r, max(color.g, color.b)));
+    return color * near_white * sun_lit * sun * light.glow_sun * SUN_GAIN;
+}
 
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     let lo = c * 12.92;
@@ -159,6 +176,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // sunlight focused by the waves, where the sun reaches the bed
     color += sunlight * n_dot_l * shadow * caustics(in.world_position);
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+
+    let pool = max(lightmap.rgb - vec3<f32>(POOL_THRESHOLD), vec3<f32>(0.0)) / (1.0 - POOL_THRESHOLD);
+    color += pool * light.glow_pools * POOL_GAIN;
+    color += sun_extra(color, n_dot_l * shadow);
 
     color = apply_fog(color, in.view_pos);
 

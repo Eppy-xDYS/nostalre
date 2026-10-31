@@ -7,6 +7,7 @@ pub mod font_atlas;
 pub mod fps;
 pub mod global_uniforms;
 pub mod gr2_model;
+pub mod grass;
 pub mod graffiti;
 pub mod grid_selector;
 pub mod ground;
@@ -16,6 +17,7 @@ mod mesh_batch;
 pub use mesh_batch::{QUAD_INDICES, Vertices, Z_QUAD_INDICES, shared_indices};
 pub mod model;
 pub mod portrait;
+pub mod post;
 pub mod rsm_anim;
 pub mod screen_distortion;
 pub mod sprite;
@@ -192,11 +194,27 @@ pub struct Renderer {
     pub dpi_scale: f32,
     pub clear_color: wgpu::Color,
     pub screen_distortion: ScreenDistortion,
+    /// The format the scene pipelines draw into: the HD target's, or the swapchain's view when HD is off
+    world_format: wgpu::TextureFormat,
+    /// The HD frame, when HD was on at startup
+    post: Option<post::PostChain>,
     pub background_mode: BackgroundMode,
     /// The map's day lighting, captured in `load_map`. `set_day_night` patches the
     /// diffuse rgb over this so the day/night fade never loses the map's light dir,
     /// ambient or shadow strength.
     pub base_light: LightUniform,
+    /// The light last written, before the glow is stamped on: a glow change re-writes it.
+    light: LightUniform,
+    /// HD world glow levels from Settings (lamp, pools, sun); the shaders get them only while bloom shows.
+    hd_glow: [f32; 3],
+    /// HD grass, when HD runs
+    grass: Option<grass::GrassRenderer>,
+    grass_tier: grass::scatter::Tier,
+    grass_density: f32,
+    /// Cells under a model floor on this map: no grass there
+    model_floor_cells: Vec<bool>,
+    /// The optional blade picture (`grass::BLADE_ART_PATH`) is looked for once, at the first map
+    grass_art_tried: bool,
     /// The loaded map's fog, kept so a `fog_scale` change can re-derive the
     /// distances without the caller handing back the table entry. `None` when
     /// the map has no entry or the player turned fog off.
@@ -261,17 +279,47 @@ impl Renderer {
         window: Arc<winit::window::Window>,
         font_px_height: f32,
         dpi_scale: f32,
+        hd: post::HdOptions,
     ) -> Self {
         let device = RenderDevice::new(window).await;
+        let float_supported = post::float_target_supported(
+            &device
+                .adapter
+                .get_texture_format_features(wgpu::TextureFormat::Rgba16Float),
+        );
+        let world_format = if hd.enabled {
+            post::pick_scene_format(device.surface_format, float_supported, hd.float_target)
+        } else {
+            device.scene_format
+        };
+        // the composite writes the swapchain's scene view, or the screen distortion's of the same format
+        let post = post::PostChain::for_options(
+            &device.device,
+            &hd,
+            world_format,
+            device.scene_format,
+            device.surface_config.width,
+            device.surface_config.height,
+        );
+        tracing::info!("HD: {} (scene target {world_format:?})", hd.enabled);
         let camera = Camera::with_aspect(
             device.surface_config.width as f32 / device.surface_config.height as f32,
         );
         let global_uniforms = GlobalUniforms::new(&device.device);
         let texture_cache = TextureCache::new(&device.device);
+        let grass = post.is_some().then(|| {
+            grass::GrassRenderer::new(
+                &device.device,
+                &device.queue,
+                world_format,
+                &global_uniforms,
+                &texture_cache.bind_group_layout,
+            )
+        });
 
         let gr2_pipeline = Gr2ModelPipeline::new(
             &device.device,
-            device.scene_format,
+            world_format,
             &global_uniforms,
             &texture_cache,
         );
@@ -308,7 +356,7 @@ impl Renderer {
         // feet on top, ground effects at the feet occluded.
         let sprite_renderer = SpriteRenderer::new(
             &device.device,
-            device.scene_format,
+            world_format,
             &texture_cache.bind_group_layout,
             logical_w,
             logical_h,
@@ -317,7 +365,7 @@ impl Renderer {
         );
         let effect_sprite_renderer = SpriteRenderer::new(
             &device.device,
-            device.scene_format,
+            world_format,
             &texture_cache.bind_group_layout,
             logical_w,
             logical_h,
@@ -326,7 +374,7 @@ impl Renderer {
         );
         let effect_primitives = effect::EffectPrimitiveRegistry::new(
             &device.device,
-            device.scene_format,
+            world_format,
             &global_uniforms.bind_group_layout,
             &texture_cache.bind_group_layout,
         );
@@ -387,8 +435,17 @@ impl Renderer {
                 a: 1.0,
             },
             screen_distortion,
+            world_format,
+            post,
             background_mode: BackgroundMode::default(),
             base_light: LightUniform::default(),
+            light: LightUniform::default(),
+            hd_glow: hd.glow,
+            grass,
+            grass_tier: grass::scatter::Tier::from_index(hd.grass_tier),
+            grass_density: hd.grass,
+            model_floor_cells: Vec::new(),
+            grass_art_tried: false,
             fog_entry: None,
             fog_scale: 1.0,
             lightmap_enabled: true,
@@ -405,8 +462,7 @@ impl Renderer {
     pub fn set_day_night(&mut self, diffuse: [f32; 3], sprite_light: [f32; 3]) {
         let mut light = self.base_light;
         light.diffuse_color = [diffuse[0], diffuse[1], diffuse[2], light.diffuse_color[3]];
-        self.global_uniforms
-            .update_light(&self.device.queue, &light);
+        self.write_light(light);
         self.sprite_renderer
             .set_world_light(&self.device.queue, sprite_light);
         self.ui_sprite_renderer
@@ -420,6 +476,122 @@ impl Renderer {
 
     pub fn lightmap_enabled(&self) -> bool {
         self.lightmap_enabled
+    }
+
+    pub fn world_format(&self) -> wgpu::TextureFormat {
+        self.world_format
+    }
+
+    /// Whether HD runs this session (fixed at startup: the scene pipelines are built for its target).
+    pub fn hd_running(&self) -> bool {
+        self.post.is_some()
+    }
+
+    pub fn hd_effects(&self) -> bool {
+        self.post.as_ref().is_some_and(post::PostChain::effects)
+    }
+
+    pub fn set_hd_effects(&mut self, on: bool) {
+        if let Some(post) = &mut self.post {
+            post.set_effects(on);
+        }
+        self.write_light(self.light);
+    }
+
+    /// Bloom's mip count and strength while HD runs (Settings).
+    pub fn set_hd_bloom(&mut self, levels: u32, intensity: f32) {
+        if let Some(post) = &mut self.post {
+            post.set_bloom(&self.device.device, levels, intensity);
+        }
+        self.write_light(self.light);
+    }
+
+    /// Grows the map's grass (HD only; none indoors). `map_name` seeds the layout.
+    pub fn load_grass(
+        &mut self,
+        gnd: &GndFile,
+        rsw: &RswFile,
+        grf: &GrfArchive,
+        map_name: &str,
+        indoor: bool,
+    ) {
+        let Some(grass) = &mut self.grass else {
+            return;
+        };
+        if !self.grass_art_tried {
+            self.grass_art_tried = true;
+            if let Some(picture) = texture::optional_picture(grass::BLADE_ART_PATH, grf) {
+                tracing::info!("grass: blade art from {}", grass::BLADE_ART_PATH);
+                grass.set_art(
+                    &self.device.device,
+                    &self.device.queue,
+                    &grass::atlas::BladeArt::from_image(&picture),
+                );
+            }
+        }
+        if indoor {
+            grass.clear();
+            return;
+        }
+        let textures: Vec<grass::classify::TextureInfo> = gnd
+            .textures
+            .iter()
+            .map(|name| {
+                let path = nostalre_resources::texture::named(name);
+                let rgb = texture::average_color(&path, grf).unwrap_or([0.0; 3]);
+                grass::classify::TextureInfo {
+                    class: grass::classify::classify_texture(name, rgb),
+                    rgb,
+                }
+            })
+            .collect();
+        grass.set_map(
+            &grass::GrassMap {
+                gnd,
+                name: map_name,
+                textures: &textures,
+                water: rsw.water.level,
+                floors: &self.model_floor_cells,
+            },
+            self.grass_tier,
+            self.grass_density,
+        );
+    }
+
+    /// Grass density 0 to 1 (Settings), applied to the current map at once.
+    pub fn set_hd_grass(&mut self, density: f32) {
+        self.grass_density = density;
+        if let Some(grass) = &mut self.grass {
+            grass.set_density(density);
+        }
+    }
+
+    /// Grass quality, 0 (Low) to 3 (Ultra), from the HD preset (Settings): the current map's grass is remade with it.
+    pub fn set_hd_grass_tier(&mut self, tier: u8) {
+        self.grass_tier = grass::scatter::Tier::from_index(tier);
+        if let Some(grass) = &mut self.grass {
+            grass.set_tier(self.grass_tier);
+        }
+    }
+
+    /// World glow levels (lamp, pools, sun) while HD runs (Settings).
+    pub fn set_hd_glow(&mut self, levels: [f32; 3]) {
+        self.hd_glow = levels;
+        self.write_light(self.light);
+    }
+
+    /// Colour grade strength and vignette while HD runs (Settings).
+    pub fn set_hd_grade(&mut self, strength: f32, vignette: bool) {
+        if let Some(post) = &mut self.post {
+            post.set_grade(strength, vignette);
+        }
+    }
+
+    /// The map's colour grade; HD fades to it.
+    pub fn set_map_grade(&mut self, map_name: &str) {
+        if let Some(post) = &mut self.post {
+            post.set_map(map_name);
+        }
     }
 
     pub fn toggle_hd_water(&mut self) -> bool {
@@ -440,8 +612,18 @@ impl Renderer {
                 *c = (*c * 1.5).min(1.0);
             }
         }
+        self.write_light(light);
+    }
+
+    /// Writes the world light with the glow levels bloom can show now.
+    fn write_light(&mut self, light: LightUniform) {
+        self.light = light;
+        let glow = match &self.post {
+            Some(post) => post::glow::effective(self.hd_glow, &post.live_options(), post.effects()),
+            None => [0.0; 3],
+        };
         self.global_uniforms
-            .update_light(&self.device.queue, &light);
+            .update_light(&self.device.queue, &LightUniform { glow, ..light });
     }
 
     pub fn set_fog(&mut self, fog: Option<FogEntry>) {
@@ -548,8 +730,7 @@ impl Renderer {
             light.ambient_color = [ambient[0], ambient[1], ambient[2], 1.0];
         }
         self.base_light = light;
-        self.global_uniforms
-            .update_light(&self.device.queue, &light);
+        self.write_light(light);
 
         let scale_factor = gnd.zoom / 10.0;
         let center_x = gnd.width as f32 * gnd.zoom / 2.0;
@@ -584,7 +765,7 @@ impl Renderer {
             &self.device.queue,
             &self.global_uniforms,
             &mut self.texture_cache,
-            self.device.scene_format,
+            self.world_format,
         );
         self.ground_renderer = Some(ground_renderer);
         let cell_lightmap = gnd.has_lightmap_data().then(|| {
@@ -610,10 +791,11 @@ impl Renderer {
             &self.device.queue,
             &self.global_uniforms,
             &mut self.texture_cache,
-            self.device.scene_format,
+            self.world_format,
         );
         self.model_renderer = props.static_models;
         self.animated_model_renderer = props.animated_models;
+        self.model_floor_cells = props.floor_cells;
 
         self.water_renderer = WaterRenderer::from_water_settings(
             &rsw.water,
@@ -623,7 +805,7 @@ impl Renderer {
             &self.device.queue,
             &self.global_uniforms,
             &mut self.texture_cache,
-            self.device.scene_format,
+            self.world_format,
         );
 
         self.skill_unit_models.clear();
@@ -650,7 +832,7 @@ impl Renderer {
             &self.device.queue,
             &self.global_uniforms,
             &mut self.texture_cache,
-            self.device.scene_format,
+            self.world_format,
             world_pos,
             scale_factor,
         ) {
@@ -796,7 +978,7 @@ impl Renderer {
         }
         let proxy = GroundProxyRenderer::new(
             &self.device.device,
-            self.device.scene_format,
+            self.world_format,
             &self.global_uniforms.bind_group_layout,
         );
         proxy.initialise(&self.device.queue);
@@ -826,21 +1008,49 @@ impl Renderer {
         let phys_w = self.device.surface_config.width;
         let phys_h = self.device.surface_config.height;
         let clear = self.clear_color;
-        if self.screen_distortion.is_active() {
-            let offscreen_scene =
-                self.screen_distortion
-                    .scene_view(&self.device.device, phys_w, phys_h);
-            let offscreen_texture = self.screen_distortion.scene_texture();
+        let distortion = self.screen_distortion.is_active();
+        // with HD or a screen distortion the frame goes through an offscreen target; both: HD composites into it
+        let output_view = if distortion {
+            self.screen_distortion
+                .scene_view(&self.device.device, phys_w, phys_h)
+        } else {
+            scene_view
+        };
+        let hd_target = self.post.as_mut().map(|post| {
+            post.resize(&self.device.device, phys_w, phys_h);
+            (post.scene_texture().clone(), post.scene_view().clone())
+        });
+        if let Some((scene_texture, target_view)) = hd_target {
             self.render_into(
-                &offscreen_scene,
-                &offscreen_scene,
+                &target_view,
+                &output_view,
                 &depth_view,
-                offscreen_texture.as_ref(),
+                Some(&scene_texture),
                 phys_w,
                 phys_h,
                 clear,
                 frame,
             );
+        } else {
+            let scene_texture = if distortion {
+                self.screen_distortion.scene_texture()
+            } else {
+                self.device
+                    .scene_copy_supported()
+                    .then(|| output.texture.clone())
+            };
+            self.render_into(
+                &output_view,
+                &output_view,
+                &depth_view,
+                scene_texture.as_ref(),
+                phys_w,
+                phys_h,
+                clear,
+                frame,
+            );
+        }
+        if distortion {
             let mut encoder = self
                 .device
                 .device
@@ -849,27 +1059,13 @@ impl Renderer {
             self.screen_distortion
                 .resolve(&mut encoder, &self.device.queue, &view);
             self.device.queue.submit(std::iter::once(encoder.finish()));
-        } else {
-            let scene_texture = self
-                .device
-                .scene_copy_supported()
-                .then_some(&output.texture);
-            self.render_into(
-                &scene_view,
-                &scene_view,
-                &depth_view,
-                scene_texture,
-                phys_w,
-                phys_h,
-                clear,
-                frame,
-            );
         }
         output.present();
     }
 
     /// `scene_texture`: the texture behind `scene_view` when it can be copied from (COPY_SRC), for HD
-    /// water; without one the water is drawn classic.
+    /// water; without one the water is drawn classic. With HD on, `scene_view` must be the HD target: it is
+    /// composited into `ui_view` before the UI.
     #[allow(clippy::too_many_arguments)]
     pub fn render_into(
         &mut self,
@@ -945,6 +1141,18 @@ impl Renderer {
         self.global_uniforms
             .update_water(&self.device.queue, &caustics);
 
+        // not drawn while `/hd` is off: no chunks made either
+        let hd_effects = self.hd_effects();
+        if let Some(grass) = self.grass.as_mut().filter(|_| hd_effects) {
+            grass.update(
+                &self.device.device,
+                &self.device.queue,
+                self.camera.view_projection(),
+                self.camera.target,
+                elapsed,
+            );
+        }
+
         if let Some(animated) = &mut self.animated_model_renderer {
             // A long stall must not fling props through their whole animation
             // in one step.
@@ -994,6 +1202,10 @@ impl Renderer {
                     if let Some(animated) = &self.animated_model_renderer {
                         nostalre_profiling::profile_scope!("animated-models");
                         animated.render(&mut pass, &self.global_uniforms, &self.texture_cache);
+                    }
+                    if let Some(grass) = self.grass.as_ref().filter(|_| self.hd_effects()) {
+                        nostalre_profiling::profile_scope!("grass");
+                        grass.render(&mut pass, &self.global_uniforms);
                     }
                     if !self.skill_unit_models.is_empty() {
                         nostalre_profiling::profile_scope!("skill-unit-models");
@@ -1186,6 +1398,16 @@ impl Renderer {
                 &self.effect_sprite_renderer.uniform_bind_group,
                 &self.effect_sprite_renderer,
                 &self.effect_primitives,
+            );
+        }
+
+        if let Some(post) = &mut self.post {
+            post.run(
+                &self.device.device,
+                &self.device.queue,
+                &mut encoder,
+                ui_view,
+                delta,
             );
         }
 

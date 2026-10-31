@@ -8,6 +8,7 @@ use nostalre_formats::rsw::{RswFile, RswObject};
 use crate::device::DEPTH_FORMAT;
 use crate::global_uniforms::GlobalUniforms;
 use crate::matrix_texture::MatrixTexture;
+use crate::post::glow;
 use crate::rsm_anim;
 use crate::texture::TextureCache;
 
@@ -20,10 +21,12 @@ pub struct ModelVertex {
     pub alpha: f32,
     pub lit_scale: f32,
     pub unlit: f32,
+    /// 1 on a lamp texture (see `post::glow`), 0 elsewhere
+    pub emissive: f32,
 }
 
 impl ModelVertex {
-    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ModelVertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &wgpu::vertex_attr_array![
@@ -33,6 +36,7 @@ impl ModelVertex {
             3 => Float32,
             4 => Float32,
             5 => Float32,
+            6 => Float32,
         ],
     };
 }
@@ -80,6 +84,8 @@ impl BoundingBox {
 pub struct RswModelRenderers {
     pub static_models: Option<ModelRenderer>,
     pub animated_models: Option<AnimatedModelRenderer>,
+    /// Cells under a static model's floor (see `grass::classify::floor_cells`); empty without static models
+    pub floor_cells: Vec<bool>,
 }
 
 impl ModelRenderer {
@@ -109,6 +115,7 @@ impl ModelRenderer {
             return RswModelRenderers {
                 static_models: None,
                 animated_models: None,
+                floor_cells: Vec::new(),
             };
         }
 
@@ -153,8 +160,15 @@ impl ModelRenderer {
             return RswModelRenderers {
                 static_models: None,
                 animated_models,
+                floor_cells: Vec::new(),
             };
         }
+        let floor_cells = crate::grass::classify::floor_cells(
+            gnd,
+            indices
+                .chunks_exact(3)
+                .map(|t| [t[0], t[1], t[2]].map(|i| vertices[i as usize].position)),
+        );
 
         let vertex_buffer = create_buffer(
             device,
@@ -180,6 +194,7 @@ impl ModelRenderer {
                 batches,
             }),
             animated_models,
+            floor_cells,
         }
     }
 
@@ -217,6 +232,7 @@ impl ModelRenderer {
                 &instance_matrix,
                 is_only,
                 alpha,
+                false,
                 &mut texture_quads,
             );
         }
@@ -300,6 +316,7 @@ impl ModelRenderer {
                 &instance_matrix,
                 is_only,
                 alpha,
+                false,
                 &mut texture_quads,
             );
         }
@@ -372,10 +389,12 @@ pub struct AnimatedModelVertex {
     pub node_slot: u32,
     pub lit_scale: f32,
     pub unlit: f32,
+    /// 1 on a lamp texture (see `post::glow`), 0 elsewhere
+    pub emissive: f32,
 }
 
 impl AnimatedModelVertex {
-    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<AnimatedModelVertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &wgpu::vertex_attr_array![
@@ -386,6 +405,7 @@ impl AnimatedModelVertex {
             4 => Uint32,
             5 => Float32,
             6 => Float32,
+            7 => Float32,
         ],
     };
 }
@@ -479,6 +499,7 @@ impl AnimatedModelRenderer {
                         (slot_base + node_idx) as u32,
                         frame0.determinant(),
                         inst.alpha,
+                        glow::is_lamp_name(rsm_path),
                         &mut texture_quads,
                     );
                 }
@@ -694,6 +715,7 @@ fn compile_animated_node(
     node_slot: u32,
     determinant: f32,
     alpha: f32,
+    lamp_model: bool,
     texture_quads: &mut HashMap<String, (Vec<AnimatedModelVertex>, Vec<u32>)>,
 ) {
     let normal_sign = if determinant < 0.0 { -1.0 } else { 1.0 };
@@ -721,6 +743,7 @@ fn compile_animated_node(
 
         let tex_name = resolve_texture_name(rsm, node, face.texture_index);
         let tex_path = nostalre_resources::texture::named(&tex_name);
+        let emissive = glow::emissive(lamp_model, &tex_path);
 
         let entry = texture_quads
             .entry(tex_path)
@@ -746,6 +769,7 @@ fn compile_animated_node(
                 node_slot,
                 lit_scale: tex_vertex_lit_scale(node, tid),
                 unlit,
+                emissive,
             });
         }
 
@@ -857,6 +881,7 @@ fn build_mesh(
 
         let (bbox, node_matrices) = calc_bounding_box(rsm);
 
+        let lamp_model = glow::is_lamp_name(rsm_path);
         for inst in instances {
             for (node_idx, node) in rsm.nodes.iter().enumerate() {
                 compile_node(
@@ -867,6 +892,7 @@ fn build_mesh(
                     &inst.instance_matrix,
                     is_only,
                     inst.alpha,
+                    lamp_model,
                     &mut texture_quads,
                 );
             }
@@ -1080,6 +1106,7 @@ fn compile_node(
     instance_matrix: &glam::Mat4,
     is_only: bool,
     alpha: f32,
+    lamp_model: bool,
     texture_quads: &mut HashMap<String, (Vec<ModelVertex>, Vec<u32>)>,
 ) {
     let matrix = model_root_matrix(rsm, bbox) * *node_matrix * node_post_matrix(rsm, node, is_only);
@@ -1119,6 +1146,7 @@ fn compile_node(
 
         let tex_name = resolve_texture_name(rsm, node, face.texture_index);
         let tex_path = nostalre_resources::texture::named(&tex_name);
+        let emissive = glow::emissive(lamp_model, &tex_path);
 
         let entry = texture_quads
             .entry(tex_path)
@@ -1143,6 +1171,7 @@ fn compile_node(
                 alpha,
                 lit_scale: tex_vertex_lit_scale(node, tid),
                 unlit,
+                emissive,
             });
         }
 
@@ -1627,6 +1656,7 @@ mod tests {
             &glam::Mat4::IDENTITY,
             true,
             1.0,
+            false,
             &mut texture_quads,
         );
         texture_quads.into_values().next().unwrap().0

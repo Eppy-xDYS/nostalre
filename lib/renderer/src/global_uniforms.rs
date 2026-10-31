@@ -8,7 +8,8 @@ pub struct LightUniform {
     pub diffuse_color: [f32; 4],
     pub ambient_color: [f32; 4],
     pub shadow_strength: f32,
-    pub _pad: [f32; 3],
+    /// HD world glow (lamp, pools, sun); 0 without bloom. See `post::glow`.
+    pub glow: [f32; 3],
 }
 
 impl Default for LightUniform {
@@ -18,7 +19,7 @@ impl Default for LightUniform {
             diffuse_color: [1.0, 1.0, 1.0, 1.0],
             ambient_color: [0.3, 0.3, 0.3, 1.0],
             shadow_strength: 1.0,
-            _pad: [0.0; 3],
+            glow: [0.0; 3],
         }
     }
 }
