@@ -149,7 +149,7 @@ fn glow_zero_effects_off() {
 
 #[test]
 fn light_uniform_glow_offset() {
-    assert_eq!(std::mem::size_of::<LightUniform>(), 64);
+    assert_eq!(std::mem::size_of::<LightUniform>(), 128);
     assert_eq!(std::mem::offset_of!(LightUniform, glow), 52);
     assert_eq!(LightUniform::default().glow, [0.0; 3], "no glow unless HD asks");
 }

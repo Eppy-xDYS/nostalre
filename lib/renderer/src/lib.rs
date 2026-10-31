@@ -19,6 +19,7 @@ pub mod model;
 pub mod portrait;
 pub mod post;
 pub mod rsm_anim;
+pub mod scene_light;
 pub mod screen_distortion;
 pub mod sprite;
 pub mod sprite_projection;
@@ -199,12 +200,27 @@ pub struct Renderer {
     /// The HD frame, when HD was on at startup
     post: Option<post::PostChain>,
     pub background_mode: BackgroundMode,
-    /// The map's day lighting, captured in `load_map`. `set_day_night` patches the
-    /// diffuse rgb over this so the day/night fade never loses the map's light dir,
+    /// The map's day lighting, captured in `load_map`. Each light written starts from
+    /// it (`refresh_light`) so the day/night fade never loses the map's light dir,
     /// ambient or shadow strength.
     pub base_light: LightUniform,
-    /// The light last written, before the glow is stamped on: a glow change re-writes it.
-    light: LightUniform,
+    /// Today's day/night fade: the diffuse and the sprites' factor (`set_day_night`)
+    legacy_diffuse: [f32; 3],
+    legacy_sprite_light: [f32; 3],
+    /// 0 day to 1 night, for the HD night
+    night: f32,
+    /// The current map is indoors: no HD night, clouds or torch
+    indoor: bool,
+    /// HD scene light rows (Settings)
+    scene: scene_light::SceneOptions,
+    cloud_offset: [f32; 2],
+    /// The torch strength last sent with the point lights
+    point_light_torch: f32,
+    /// The point lights last sent, for lighting sprites the way the terrain is lit
+    point_lights_sent: global_uniforms::PointLightsUniform,
+    /// The scene light and sprite light last written, for `actor_scene_light`
+    scene_now: [f32; 4],
+    sprite_light_now: [f32; 3],
     /// HD world glow levels from Settings (lamp, pools, sun); the shaders get them only while bloom shows.
     hd_glow: [f32; 3],
     /// HD grass, when HD runs
@@ -439,7 +455,16 @@ impl Renderer {
             post,
             background_mode: BackgroundMode::default(),
             base_light: LightUniform::default(),
-            light: LightUniform::default(),
+            legacy_diffuse: [1.0; 3],
+            legacy_sprite_light: [1.0; 3],
+            night: 0.0,
+            indoor: false,
+            scene: hd.scene,
+            cloud_offset: [0.0; 2],
+            point_light_torch: 0.0,
+            point_lights_sent: bytemuck::Zeroable::zeroed(),
+            scene_now: [0.0; 4],
+            sprite_light_now: [1.0; 3],
             hd_glow: hd.glow,
             grass,
             grass_tier: grass::scatter::Tier::from_index(hd.grass_tier),
@@ -459,14 +484,13 @@ impl Renderer {
         self.background_mode = mode;
     }
 
-    pub fn set_day_night(&mut self, diffuse: [f32; 3], sprite_light: [f32; 3]) {
-        let mut light = self.base_light;
-        light.diffuse_color = [diffuse[0], diffuse[1], diffuse[2], light.diffuse_color[3]];
-        self.write_light(light);
-        self.sprite_renderer
-            .set_world_light(&self.device.queue, sprite_light);
-        self.ui_sprite_renderer
-            .set_world_light(&self.device.queue, sprite_light);
+    /// Today's day/night fade (`diffuse`, the sprites' `sprite_light`) and how far into the night it is (0 to 1)
+    /// for the HD night, which replaces the fade while it runs.
+    pub fn set_day_night(&mut self, diffuse: [f32; 3], sprite_light: [f32; 3], night: f32) {
+        self.legacy_diffuse = diffuse;
+        self.legacy_sprite_light = sprite_light;
+        self.night = night;
+        self.refresh_light();
     }
 
     pub fn toggle_lightmap(&mut self) -> bool {
@@ -495,7 +519,7 @@ impl Renderer {
         if let Some(post) = &mut self.post {
             post.set_effects(on);
         }
-        self.write_light(self.light);
+        self.refresh_light();
     }
 
     /// Bloom's mip count and strength while HD runs (Settings).
@@ -503,7 +527,7 @@ impl Renderer {
         if let Some(post) = &mut self.post {
             post.set_bloom(&self.device.device, levels, intensity);
         }
-        self.write_light(self.light);
+        self.refresh_light();
     }
 
     /// Grows the map's grass (HD only; none indoors). `map_name` seeds the layout.
@@ -577,7 +601,7 @@ impl Renderer {
     /// World glow levels (lamp, pools, sun) while HD runs (Settings).
     pub fn set_hd_glow(&mut self, levels: [f32; 3]) {
         self.hd_glow = levels;
-        self.write_light(self.light);
+        self.refresh_light();
     }
 
     /// Colour grade strength and vignette while HD runs (Settings).
@@ -606,24 +630,81 @@ impl Renderer {
         }
         self.global_uniforms
             .set_cell_light_enabled(&self.device.queue, enabled);
+        self.refresh_light();
+    }
+
+    /// HD scene light rows (Settings), live.
+    pub fn set_hd_scene(&mut self, scene: scene_light::SceneOptions) {
+        self.scene = scene;
+        self.refresh_light();
+    }
+
+    /// Whether the current map is indoors (no HD night, clouds or torch there).
+    pub fn set_map_indoor(&mut self, indoor: bool) {
+        self.indoor = indoor;
+        self.refresh_light();
+    }
+
+    /// The map's day light with the lightmap setting applied: without lightmaps the sky lifts to make up.
+    fn day_light(&self) -> LightUniform {
         let mut light = self.base_light;
-        if !enabled {
+        if !self.lightmap_enabled {
             for c in light.ambient_color.iter_mut().take(3) {
                 *c = (*c * 1.5).min(1.0);
             }
         }
-        self.write_light(light);
+        light
     }
 
-    /// Writes the world light with the glow levels bloom can show now.
-    fn write_light(&mut self, light: LightUniform) {
-        self.light = light;
-        let glow = match &self.post {
+    /// The HD night runs: HD effects on, outdoors, Night look on.
+    fn hd_night(&self) -> bool {
+        self.hd_effects() && !self.indoor && self.scene.night_look
+    }
+
+    /// Writes the world light (day/night, HD scene light, the glow levels bloom can show now) and the
+    /// sprites' light.
+    fn refresh_light(&mut self) {
+        let day = self.day_light();
+        let mut light = scene_light::frame_light(
+            &day,
+            self.legacy_diffuse,
+            self.night,
+            self.hd_effects(),
+            self.indoor,
+            &self.scene,
+        );
+        light.glow = match &self.post {
             Some(post) => post::glow::effective(self.hd_glow, &post.live_options(), post.effects()),
             None => [0.0; 3],
         };
+        light.cloud[..2].copy_from_slice(&self.cloud_offset);
         self.global_uniforms
-            .update_light(&self.device.queue, &LightUniform { glow, ..light });
+            .update_light(&self.device.queue, &light);
+        let sprite_light = if self.hd_night() {
+            scene_light::sprite_light(&day, &light)
+        } else {
+            self.legacy_sprite_light
+        };
+        self.sprite_renderer
+            .set_world_light(&self.device.queue, sprite_light);
+        self.ui_sprite_renderer
+            .set_world_light(&self.device.queue, sprite_light);
+        self.scene_now = light.scene;
+        self.sprite_light_now = sprite_light;
+    }
+
+    /// The HD scene light on a sprite at `world` (an actor's chest) standing in baked light `baked` (the raw
+    /// lightmap colour under it): a factor on its colour, over the sprites' world light. Lamps light it as they
+    /// light the ground; at night a baked light pool brings back its day look. `[1; 3]` with HD scene light and
+    /// HD night off.
+    pub fn actor_scene_light(&self, world: glam::Vec3, baked: [f32; 3]) -> [f32; 3] {
+        let [on, night, _, cap] = self.scene_now;
+        if on <= 0.0 && night <= 0.0 {
+            return [1.0; 3];
+        }
+        let bound = cap as u32 + u32::from(night > 0.0);
+        let lamps = scene_light::lamps_at(&self.point_lights_sent, bound, world);
+        scene_light::actor_factor(self.sprite_light_now, baked, night, lamps)
     }
 
     pub fn set_fog(&mut self, fog: Option<FogEntry>) {
@@ -730,7 +811,8 @@ impl Renderer {
             light.ambient_color = [ambient[0], ambient[1], ambient[2], 1.0];
         }
         self.base_light = light;
-        self.write_light(light);
+        self.legacy_diffuse = [light.diffuse_color[0], light.diffuse_color[1], light.diffuse_color[2]];
+        self.refresh_light();
 
         let scale_factor = gnd.zoom / 10.0;
         let center_x = gnd.width as f32 * gnd.zoom / 2.0;
@@ -739,7 +821,9 @@ impl Renderer {
             .objects
             .iter()
             .filter_map(|obj| {
-                if let RswObject::Light(l) = obj {
+                if let RswObject::Light(l) = obj
+                    && scene_light::is_placed(l.position)
+                {
                     Some(PointLightGpu {
                         position: [
                             l.position[0] * scale_factor + center_x,
@@ -1110,16 +1194,26 @@ impl Renderer {
 
         self.global_uniforms
             .update_camera(&self.device.queue, &self.camera);
-        // the lights nearest the camera, again when it moved half a cell
+        // the lights nearest the camera, again when it moved half a cell or the torch fades
         let center = self.camera.target;
+        let torch_night = if self.hd_night() { self.night } else { 0.0 };
         if self
             .point_light_center
             .is_none_or(|c| c.distance(center) > 5.0)
+            || torch_night != self.point_light_torch
         {
-            let nearest = global_uniforms::nearest_point_lights(&self.point_lights, center);
+            let torch = scene_light::torch(center, torch_night, !self.indoor);
+            let nearest = global_uniforms::nearest_point_lights(&self.point_lights, center, torch);
             self.global_uniforms
                 .update_point_lights(&self.device.queue, &nearest);
             self.point_light_center = Some(center);
+            self.point_light_torch = torch_night;
+            self.point_lights_sent = nearest;
+        }
+        if self.hd_effects() && !self.indoor && self.scene.clouds > 0.0 {
+            self.cloud_offset = scene_light::cloud_offset(elapsed);
+            self.global_uniforms
+                .update_cloud(&self.device.queue, self.cloud_offset);
         }
 
         let hd_water = self.hd_water && scene_texture.is_some();

@@ -31,6 +31,8 @@ pub struct HdOptions {
     pub grass: f32,
     /// Grass quality, 0 Low to 3 Ultra
     pub grass_tier: u8,
+    /// Scene light rows (lightmaps, lamps, clouds, night)
+    pub scene: crate::scene_light::SceneOptions,
 }
 
 /// The adapter can draw into, filter and blend a format with these features.

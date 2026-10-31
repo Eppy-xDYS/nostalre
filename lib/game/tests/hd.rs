@@ -217,3 +217,54 @@ fn grass_tier_by_preset() {
     assert_eq!(tier(HdPreset::Ultra), 3);
     assert_eq!(tier(HdPreset::Custom), 2);
 }
+
+#[test]
+fn scene_defaults_and_clamp() {
+    let config = HdConfig::default();
+    assert!(config.scene_light);
+    assert!(config.night_look);
+    assert_eq!(config.cloud_shadows, 0.6);
+    assert_eq!(config.cloud_strength(), 0.6);
+    let old: HdConfig = serde_json::from_str(r#"{"enabled": true, "grass": 0.5}"#).unwrap();
+    assert!(old.scene_light && old.night_look, "a config from before S5 gets the defaults");
+    assert_eq!(old.cloud_shadows, 0.6);
+    let with = |cloud_shadows| HdConfig {
+        cloud_shadows,
+        ..HdConfig::default()
+    };
+    assert_eq!(with(3.0).cloud_strength(), 1.0);
+    assert_eq!(with(-1.0).cloud_strength(), 0.0);
+    assert_eq!(with(f32::NAN).cloud_strength(), 0.0);
+}
+
+#[test]
+fn terrain_light_cap_by_preset() {
+    let cap = |preset| {
+        HdConfig {
+            preset,
+            ..HdConfig::default()
+        }
+        .terrain_light_cap()
+    };
+    assert_eq!(cap(HdPreset::Low), 0);
+    assert_eq!(cap(HdPreset::Medium), 8);
+    assert_eq!(cap(HdPreset::High), 16);
+    assert_eq!(cap(HdPreset::Ultra), 32);
+    assert_eq!(cap(HdPreset::Custom), 16);
+}
+
+#[test]
+fn scene_rows_are_live() {
+    let on = HdConfig {
+        enabled: true,
+        ..HdConfig::default()
+    };
+    let off = HdConfig {
+        scene_light: false,
+        night_look: false,
+        cloud_shadows: 0.0,
+        ..on.clone()
+    };
+    assert!(!hd::needs_restart(&on, &off, true));
+    assert!(!hd::needs_restart(&off, &on, true));
+}

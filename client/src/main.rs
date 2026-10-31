@@ -396,6 +396,7 @@ impl App {
         if let Some(renderer) = &mut self.renderer {
             let fog = if self.config.fog { map_data.fog } else { None };
             renderer.load_map(&map_data.gnd, &map_data.rsw, grf, fog);
+            renderer.set_map_indoor(map_data.indoor);
             renderer.set_map_grade(map_name);
             renderer.load_grass(&map_data.gnd, &map_data.rsw, grf, map_name, map_data.indoor);
 
@@ -829,6 +830,7 @@ impl ApplicationHandler for App {
                 glow: self.config.custom.hd.glow_levels(),
                 grass: self.config.custom.hd.grass_density(),
                 grass_tier: self.config.custom.hd.grass_tier(),
+                scene: config::Config::hd_scene(&self.config.custom.hd),
             },
         ));
         renderer.set_fog_scale(self.config.custom.fog_scale);

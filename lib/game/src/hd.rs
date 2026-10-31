@@ -50,6 +50,12 @@ pub struct HdConfig {
     pub sun_glow: f32,
     /// Grass density, 0 to 1 (0: none)
     pub grass: f32,
+    /// Softer lightmaps, floor-only baked shadows and map lamps lighting the ground
+    pub scene_light: bool,
+    /// Drifting cloud shadows outdoors, 0 to 1 (0: none)
+    pub cloud_shadows: f32,
+    /// Moonlit night outdoors (off: the original's mild dimming)
+    pub night_look: bool,
 }
 
 impl Default for HdConfig {
@@ -64,6 +70,9 @@ impl Default for HdConfig {
             light_pools: 0.5,
             sun_glow: 0.3,
             grass: 1.0,
+            scene_light: true,
+            cloud_shadows: 0.6,
+            night_look: true,
         }
     }
 }
@@ -120,6 +129,20 @@ impl HdConfig {
             HdPreset::Medium => 1,
             HdPreset::High | HdPreset::Custom => 2,
             HdPreset::Ultra => 3,
+        }
+    }
+
+    pub fn cloud_strength(&self) -> f32 {
+        clamp_or_zero(self.cloud_shadows, 1.0)
+    }
+
+    /// Map lamps the terrain shades with: none on Low, up to all 32 on Ultra.
+    pub fn terrain_light_cap(&self) -> u32 {
+        match self.preset {
+            HdPreset::Low => 0,
+            HdPreset::Medium => 8,
+            HdPreset::High | HdPreset::Custom => 16,
+            HdPreset::Ultra => 32,
         }
     }
 

@@ -40,6 +40,17 @@ struct LightUniforms {
     diffuse_color: vec4<f32>,
     ambient_color: vec4<f32>,
     shadow_strength: f32,
+    // world glow (unused here)
+    _glow_lamp: f32,
+    _glow_pools: f32,
+    _glow_sun: f32,
+    // HD scene light (scene_light.rs): on, night 0..1, cloud strength, terrain lamp cap; all 0: today's look
+    scene: vec4<f32>,
+    // cloud drift offset (xy)
+    cloud: vec4<f32>,
+    // the map's day sun + sky, for the night lift
+    day_light: vec4<f32>,
+    _reserved: vec4<f32>,
 };
 
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {

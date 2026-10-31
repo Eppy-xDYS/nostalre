@@ -2,12 +2,16 @@ pub use nostalre_effects::EFST_SKE;
 
 const FADE_RATE_PER_SEC: f32 = 0.3;
 const NIGHT_FLOOR: f32 = 0.5;
+/// The HD night (moonlight) fades in and out over this long.
+const NIGHT_FADE_SECONDS: f32 = 3.0;
 
 pub struct DayNightState {
     night: bool,
     diffuse_rg: [f32; 2],
     base_diffuse: [f32; 3],
     ambient: [f32; 3],
+    /// 0 day to 1 night, for the HD night; kept across maps
+    amount: f32,
     dirty: bool,
 }
 
@@ -18,6 +22,7 @@ impl Default for DayNightState {
             diffuse_rg: [1.0, 1.0],
             base_diffuse: [1.0, 1.0, 1.0],
             ambient: [0.3, 0.3, 0.3],
+            amount: 0.0,
             dirty: false,
         }
     }
@@ -28,6 +33,7 @@ impl DayNightState {
         self.night = night;
     }
 
+    /// A new map's day light; the night (if any) carries over at once.
     pub fn on_map_loaded(&mut self, diffuse: [f32; 3], ambient: [f32; 3]) {
         self.base_diffuse = diffuse;
         self.diffuse_rg = [diffuse[0], diffuse[1]];
@@ -43,6 +49,16 @@ impl DayNightState {
     }
 
     pub fn tick(&mut self, delta: f32) {
+        let target = if self.night { 1.0 } else { 0.0 };
+        if self.amount != target {
+            let step = delta / NIGHT_FADE_SECONDS;
+            self.amount = if self.amount < target {
+                (self.amount + step).min(target)
+            } else {
+                (self.amount - step).max(target)
+            };
+            self.dirty = true;
+        }
         let rate = FADE_RATE_PER_SEC * delta;
         for c in 0..2 {
             let before = self.diffuse_rg[c];
@@ -61,6 +77,11 @@ impl DayNightState {
 
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
+    }
+
+    /// How far into the night (0 day, 1 night), fading over 3 s.
+    pub fn night_amount(&self) -> f32 {
+        self.amount
     }
 
     pub fn world_diffuse(&self) -> [f32; 3] {

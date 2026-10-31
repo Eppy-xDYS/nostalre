@@ -569,6 +569,16 @@ fn default_shortcut_commands() -> Vec<String> {
 
 impl Config {
     /// The graphics options as the option windows, the menu's Settings and the chat commands change them
+    /// The HD scene light rows as the renderer takes them.
+    pub fn hd_scene(hd: &nostalre_game::hd::HdConfig) -> nostalre_renderer::scene_light::SceneOptions {
+        nostalre_renderer::scene_light::SceneOptions {
+            on: hd.scene_light,
+            night_look: hd.night_look,
+            clouds: hd.cloud_strength(),
+            light_cap: hd.terrain_light_cap(),
+        }
+    }
+
     pub fn graphics(&self) -> nostalre_game::display::GraphicsSettings {
         nostalre_game::display::GraphicsSettings {
             ui_scale: self.dpi_scale,

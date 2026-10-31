@@ -187,6 +187,7 @@ impl App {
                 renderer.set_hd_glow(hd.glow_levels());
                 renderer.set_hd_grass(hd.grass_density());
                 renderer.set_hd_grass_tier(hd.grass_tier());
+                renderer.set_hd_scene(crate::config::Config::hd_scene(&hd));
             }
             self.config.custom.hd = hd;
         }

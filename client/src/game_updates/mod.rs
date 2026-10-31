@@ -159,6 +159,7 @@ impl App {
             renderer.set_day_night(
                 self.game.schedulers.day_night.world_diffuse(),
                 self.game.schedulers.day_night.sprite_light(),
+                self.game.schedulers.day_night.night_amount(),
             );
         }
         let camera = self.renderer.as_ref().map(|r| &r.camera);

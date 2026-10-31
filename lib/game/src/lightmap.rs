@@ -111,6 +111,21 @@ impl ActorLightmap {
         out
     }
 
+    /// The raw baked light colour (0 to 1) at a fractional GAT position, the same texels the terrain samples; 0
+    /// off the map or on a raised cell.
+    pub fn baked_at_pos(&self, cx: f32, cy: f32) -> [f32; 3] {
+        let (ix, iy) = (cx.floor() as i32, cy.floor() as i32);
+        if ix < 0 || iy < 0 || ix >= self.gat_width || iy >= self.gat_height {
+            return [0.0; 3];
+        }
+        if !self.on_ground[(iy * self.gat_width + ix) as usize] {
+            return [0.0; 3];
+        }
+        let tx = cx / 2.0 * CELL_STRIDE as f32;
+        let ty = cy / 2.0 * CELL_STRIDE as f32;
+        self.sample_bilinear(tx, ty).1.map(|c| c / 255.0)
+    }
+
     pub fn intensity_at(&self, cx: i32, cy: i32) -> [f32; 3] {
         self.intensity_at_pos(cx as f32 + 0.5, cy as f32 + 0.5)
     }

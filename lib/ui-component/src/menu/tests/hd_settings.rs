@@ -34,6 +34,9 @@ fn hd_rows_on_graphics_page() {
             Opt::LightPools,
             Opt::SunGlow,
             Opt::Grass,
+            Opt::SceneLight,
+            Opt::CloudShadows,
+            Opt::NightLook,
             Opt::Grade,
             Opt::Vignette
         ]
@@ -209,4 +212,60 @@ fn grass_slider_live() {
     assert!(!Opt::Grass.help().contains("restart"), "applies live");
     assert!(Opt::Grass.help().contains("0%: off"));
     assert_eq!(Opt::Grass.verb(), None);
+}
+
+const SCENE_ROWS: [Opt; 3] = [Opt::SceneLight, Opt::CloudShadows, Opt::NightLook];
+
+#[test]
+fn scene_rows_after_grass() {
+    let rows: Vec<Opt> = Page::Graphics
+        .entries()
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Opt(o) => Some(*o),
+            Entry::Section(_) => None,
+        })
+        .collect();
+    let grass = rows.iter().position(|o| *o == Opt::Grass).unwrap();
+    assert_eq!(rows[grass + 1..grass + 4], SCENE_ROWS, "right after Grass");
+    let labels: Vec<&str> = SCENE_ROWS.iter().map(|o| o.label()).collect();
+    assert_eq!(labels, ["Scene light", "Cloud shadows", "Night look"]);
+    assert!(SCENE_ROWS.iter().all(|o| o.group() == Group::Graphics));
+    assert!(SCENE_ROWS.iter().all(|o| !o.help().contains("restart")), "all live");
+}
+
+#[test]
+fn scene_toggles_and_reset() {
+    let scene: fn(&SettingsValues) -> bool = |v| v.graphics.hd.scene_light;
+    let night: fn(&SettingsValues) -> bool = |v| v.graphics.hd.night_look;
+    for (opt, field) in [(Opt::SceneLight, scene), (Opt::NightLook, night)] {
+        let mut v = values();
+        assert!(matches!(opt.shown_value(&mut v), Shown::Toggle(true)), "{opt:?} on by default");
+        assert!(opt.change(&mut v, Change::Flip));
+        assert!(!field(&v), "{opt:?} flipped off");
+        let mut defaults = values();
+        assert!(opt.reset(&mut v, &mut defaults));
+        assert!(field(&v), "{opt:?} reset on");
+    }
+}
+
+#[test]
+fn cloud_slider() {
+    let mut v = values();
+    assert!(matches!(Opt::CloudShadows.shown_value(&mut v), Shown::Slider(60)));
+    assert!(Opt::CloudShadows.change(&mut v, Change::Prev));
+    assert!((v.graphics.hd.cloud_shadows - 0.55).abs() < 1e-6);
+    for _ in 0..30 {
+        Opt::CloudShadows.change(&mut v, Change::Prev);
+    }
+    assert_eq!(v.graphics.hd.cloud_shadows, 0.0, "0 %: off");
+    for _ in 0..30 {
+        Opt::CloudShadows.change(&mut v, Change::Next);
+    }
+    assert!((v.graphics.hd.cloud_shadows - 1.0).abs() < 1e-6, "100 % is the top");
+    let mut defaults = values();
+    assert!(Opt::CloudShadows.reset(&mut v, &mut defaults));
+    assert!((v.graphics.hd.cloud_shadows - 0.6).abs() < 1e-6);
+    assert!(Opt::CloudShadows.help().contains("0%: off"));
+    assert_eq!(Opt::CloudShadows.verb(), None);
 }
