@@ -353,6 +353,27 @@ fn light_shaders_validate() {
 }
 
 /// The terrain draws the lamps (S5): it reads the shared point-light uniform, laid out as the Rust one.
+/// Grass under a lamp is lit like the ground it grows on: it reads the same point lights, laid out as Rust sends them.
+#[test]
+fn grass_reads_point_lights() {
+    let src = include_str!("../src/shaders/grass.wgsl");
+    let module = parse("grass", src);
+    let span = module
+        .types
+        .iter()
+        .find(|(_, t)| t.name.as_deref() == Some("PointLights"))
+        .map(|(_, t)| match &t.inner {
+            naga::TypeInner::Struct { span, .. } => *span,
+            other => panic!("PointLights is {other:?}"),
+        })
+        .expect("grass.wgsl has PointLights");
+    assert_eq!(
+        span as usize,
+        std::mem::size_of::<nostalre_renderer::global_uniforms::PointLightsUniform>()
+    );
+    assert!(src.contains("lamps(in.world_position)"), "the grass adds the lamps");
+}
+
 #[test]
 fn terrain_reads_point_lights() {
     let src = nostalre_renderer::TERRAIN_WGSL;
