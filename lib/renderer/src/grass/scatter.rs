@@ -2,6 +2,7 @@
 //! whenever the camera comes near it, from a hash of the map name and the cell, so they are the same every time.
 
 use nostalre_formats::gnd::GndFile;
+use nostalre_formats::map_water::MapWater;
 
 use super::Tuft;
 use super::chunks::CHUNK_CELLS;
@@ -63,8 +64,8 @@ pub struct FieldInput<'a> {
     /// Seeds the layout
     pub map: &'a str,
     pub textures: &'a [TextureInfo],
-    /// The map's water level, none without water
-    pub water: Option<f32>,
+    /// The map's water (each cell's zone level), none without water
+    pub water: Option<&'a MapWater>,
     /// Cells under a model floor (`classify::floor_cells`), none when empty
     pub floors: &'a [bool],
 }
@@ -103,7 +104,13 @@ impl GrassField {
                 let grows = if input.floors.get(i) == Some(&true) {
                     None
                 } else {
-                    classify::cell_grows(gnd, x, y, input.textures, input.water)
+                    classify::cell_grows(
+                        gnd,
+                        x,
+                        y,
+                        input.textures,
+                        input.water.map(|w| w.zone_at(gnd, x, y).level),
+                    )
                 };
                 let (share, rgb) = match grows {
                     Some(ground) => {

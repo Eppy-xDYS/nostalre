@@ -12,6 +12,7 @@ pub mod lua_source;
 pub mod lua_table;
 pub mod lub;
 pub mod map_coordinates;
+pub mod map_water;
 mod mixcrypt;
 pub mod pal;
 pub mod pettalk;

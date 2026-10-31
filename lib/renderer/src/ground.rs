@@ -756,7 +756,7 @@ fn create_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("terrain"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/terrain.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(crate::TERRAIN_WGSL.into()),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -883,6 +883,7 @@ mod tests {
             color_bgra: [255, 255, 255, 255],
         };
         let gnd = GndFile {
+            water: None,
             version: (1, 7),
             width: 2,
             height: 1,
@@ -947,6 +948,7 @@ mod tests {
             color_bgra,
         };
         let gnd = GndFile {
+            water: None,
             version: (1, 7),
             width: 3,
             height: 3,
@@ -995,6 +997,7 @@ mod tests {
     /// Two cells side by side in x, heights given as [sw, se, nw, ne].
     fn gnd_two_cells(cell_a: [f32; 4], cell_b: [f32; 4]) -> GndFile {
         GndFile {
+            water: None,
             version: (1, 7),
             width: 2,
             height: 1,
@@ -1061,6 +1064,7 @@ mod tests {
     #[test]
     fn east_wall_maps_uv_columns_across_the_wall_not_down_it() {
         let gnd = GndFile {
+            water: None,
             version: (1, 7),
             width: 2,
             height: 1,

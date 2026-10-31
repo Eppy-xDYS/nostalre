@@ -27,6 +27,27 @@ pub struct GndCell {
     pub surface_east: i32,
 }
 
+/// One water plane: the whole map's (GND 1.8) or one zone's (1.9). Units as the RSW's water.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GndWaterZone {
+    pub level: f32,
+    pub water_type: i32,
+    pub wave_height: f32,
+    pub wave_speed: f32,
+    pub wave_pitch: f32,
+    pub anim_speed: i32,
+}
+
+/// Water kept in the GND, where maps with an RSW 2.6+ store it. 1.9 splits the map into a
+/// `split_width` × `split_height` grid of zones, row by row, x fastest.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GndWater {
+    pub main: GndWaterZone,
+    pub split_width: i32,
+    pub split_height: i32,
+    pub zones: Vec<GndWaterZone>,
+}
+
 pub struct GndFile {
     pub version: (u8, u8),
     pub width: i32,
@@ -36,6 +57,43 @@ pub struct GndFile {
     pub lightmaps: Vec<Lightmap>,
     pub surfaces: Vec<GndSurface>,
     pub cells: Vec<GndCell>,
+    /// GND 1.8+; `None` for older files or a block cut short.
+    pub water: Option<GndWater>,
+}
+
+fn read_water_zone(r: &mut Cursor<&[u8]>) -> std::io::Result<GndWaterZone> {
+    Ok(GndWaterZone {
+        level: r.read_f32::<LE>()?,
+        water_type: r.read_i32::<LE>()?,
+        wave_height: r.read_f32::<LE>()?,
+        wave_speed: r.read_f32::<LE>()?,
+        wave_pitch: r.read_f32::<LE>()?,
+        anim_speed: r.read_i32::<LE>()?,
+    })
+}
+
+fn read_water(r: &mut Cursor<&[u8]>, version: (u8, u8)) -> std::io::Result<GndWater> {
+    let main = read_water_zone(r)?;
+    let split_width = r.read_i32::<LE>()?;
+    let split_height = r.read_i32::<LE>()?;
+    let mut zones = Vec::new();
+    if version_at_least(version, 1, 9) {
+        let count = split_width.max(0) as usize * split_height.max(0) as usize;
+        // a bad count would otherwise reserve or read far past the file
+        let left = (r.get_ref().len() as u64).saturating_sub(r.position()) as usize;
+        if count.checked_mul(24).is_none_or(|bytes| bytes > left) {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        for _ in 0..count {
+            zones.push(read_water_zone(r)?);
+        }
+    }
+    Ok(GndWater {
+        main,
+        split_width,
+        split_height,
+        zones,
+    })
 }
 
 impl GndFile {
@@ -156,6 +214,10 @@ impl GndFile {
             });
         }
 
+        let water = version_at_least(version, 1, 8)
+            .then(|| read_water(&mut r, version).ok())
+            .flatten();
+
         Ok(GndFile {
             version,
             width,
@@ -165,6 +227,7 @@ impl GndFile {
             lightmaps,
             surfaces,
             cells,
+            water,
         })
     }
 }

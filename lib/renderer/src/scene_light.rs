@@ -22,9 +22,24 @@ pub const KNEE_LIMIT: f32 = 1.15;
 pub const LAMP_SCALE: f32 = 0.8;
 /// Cloud drift, noise units per second (x, z).
 pub const CLOUD_WIND: [f32; 2] = [0.018, 0.011];
-/// Night as a factor on the map's day sun and sky: a dim blue moonlight where the scene stays readable.
-pub const NIGHT_DIFFUSE: [f32; 3] = [0.30, 0.38, 0.50];
-pub const NIGHT_AMBIENT: [f32; 3] = [0.50, 0.62, 0.80];
+/// Night as a factor on the map's day sun and sky, a dim blue moonlight, picked by the Night darkness row:
+/// 0 the S5 moonlight (towns read as dusk), 1 near black. The default (0.6) gives `NIGHT_DIFFUSE` /
+/// `NIGHT_AMBIENT` (you 2026-10-31: "nights feel way too bright", then "make darkness configurable").
+pub const NIGHT_DIFFUSE: [f32; 3] = [0.14, 0.18, 0.28];
+pub const NIGHT_AMBIENT: [f32; 3] = [0.26, 0.32, 0.46];
+pub const NIGHT_DARKNESS: f32 = 0.6;
+const NIGHT_BRIGHT_DIFFUSE: [f32; 3] = [0.30, 0.38, 0.50];
+const NIGHT_BRIGHT_AMBIENT: [f32; 3] = [0.50, 0.62, 0.80];
+// where the default's step from the bright end, carried on to 1, lands
+const NIGHT_DARK_DIFFUSE: [f32; 3] = [0.30 - 0.16 / 0.6, 0.38 - 0.20 / 0.6, 0.50 - 0.22 / 0.6];
+const NIGHT_DARK_AMBIENT: [f32; 3] = [0.50 - 0.24 / 0.6, 0.62 - 0.30 / 0.6, 0.80 - 0.34 / 0.6];
+
+/// The night's factors on the day sun and sky (diffuse, ambient) for a Night darkness of 0 to 1.
+pub fn night_factors(darkness: f32) -> ([f32; 3], [f32; 3]) {
+    let d = darkness.clamp(0.0, 1.0);
+    let mix = |a: [f32; 3], b: [f32; 3]| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * d);
+    (mix(NIGHT_BRIGHT_DIFFUSE, NIGHT_DARK_DIFFUSE), mix(NIGHT_BRIGHT_AMBIENT, NIGHT_DARK_AMBIENT))
+}
 /// The player's torch at night: warm, about 7 cells across, held 7.5 units up.
 pub const TORCH_COLOR: [f32; 3] = [0.7, 0.595, 0.385];
 pub const TORCH_RANGE: f32 = 70.0;
@@ -36,6 +51,12 @@ pub struct SceneOptions {
     /// Lightmap treatment, baked shadows and lamps on the ground
     pub on: bool,
     pub night_look: bool,
+    /// How dark the night is, 0 to 1 (`night_factors`)
+    pub night_darkness: f32,
+    /// The night torch around the player (`torch`)
+    pub player_light: bool,
+    /// The lamp models' light at night, 0 to 1 (`LAMP_COLOR` at 0.5, twice it at 1)
+    pub lamp_light: f32,
     /// 0 to 1, 0 = no clouds
     pub clouds: f32,
     /// Lamps the terrain shades with (by quality preset)
@@ -49,6 +70,9 @@ impl Default for SceneOptions {
         Self {
             on: true,
             night_look: true,
+            night_darkness: NIGHT_DARKNESS,
+            player_light: false,
+            lamp_light: 0.5,
             clouds: 0.6,
             light_cap: 16,
             day_cycle: true,
@@ -113,7 +137,7 @@ pub fn light_knee(sum: [f32; 3]) -> [f32; 3] {
 /// At night, a pixel inside a baked light pool goes back toward its daylit look, so lamps and the walls round
 /// them stay lit.
 pub fn night_lift(lit: [f32; 3], surface: [f32; 3], lm: [f32; 3], night: f32, day: [f32; 3]) -> [f32; 3] {
-    let k = smoothstep(0.02, 0.2, max3(lm)) * night;
+    let k = smoothstep(0.08, 0.18, max3(lm)) * night;
     if k <= 0.0 {
         return lit;
     }
@@ -126,11 +150,12 @@ pub fn cloud_offset(seconds: f32) -> [f32; 2] {
 }
 
 /// The map's light at `night` (0 day, 1 full night).
-pub fn night_light(base: &LightUniform, night: f32) -> LightUniform {
+pub fn night_light(base: &LightUniform, night: f32, darkness: f32) -> LightUniform {
+    let (diffuse, ambient) = night_factors(darkness);
     let mut out = *base;
     for i in 0..3 {
-        out.diffuse_color[i] = base.diffuse_color[i] * (1.0 + (NIGHT_DIFFUSE[i] - 1.0) * night);
-        out.ambient_color[i] = base.ambient_color[i] * (1.0 + (NIGHT_AMBIENT[i] - 1.0) * night);
+        out.diffuse_color[i] = base.diffuse_color[i] * (1.0 + (diffuse[i] - 1.0) * night);
+        out.ambient_color[i] = base.ambient_color[i] * (1.0 + (ambient[i] - 1.0) * night);
     }
     out
 }
@@ -159,7 +184,7 @@ pub fn frame_light(
 ) -> LightUniform {
     let hd_night = hd && !indoor && opts.night_look;
     let mut out = if hd_night {
-        night_light(base, night)
+        night_light(base, night, opts.night_darkness)
     } else {
         let mut today = *base;
         today.diffuse_color[..3].copy_from_slice(&legacy_diffuse);
@@ -201,7 +226,7 @@ pub fn lamps_at(lights: &PointLightsUniform, bound: u32, world: glam::Vec3) -> [
 /// A sprite's factor over the sprites' world light `sprite_light`: at night, inside a baked light pool (`baked`,
 /// the raw lightmap colour under it) it goes back toward its daylit look, as the ground does; lamps add on top.
 pub fn actor_factor(sprite_light: [f32; 3], baked: [f32; 3], night: f32, lamps: [f32; 3]) -> [f32; 3] {
-    let k = smoothstep(0.02, 0.2, max3(lightmap_treat(baked))) * night;
+    let k = smoothstep(0.08, 0.18, max3(lightmap_treat(baked))) * night;
     std::array::from_fn(|i| {
         let s = sprite_light[i];
         let lit = s + (1.0 - s) * k + lamps[i];
@@ -215,8 +240,21 @@ pub fn is_placed(position: [f32; 3]) -> bool {
 }
 
 /// A lamp model's light at night: warm, about 6 cells (S2d, D44).
-pub const LAMP_COLOR: [f32; 3] = [0.6, 0.48, 0.33];
+pub const LAMP_COLOR: [f32; 3] = [0.78, 0.62, 0.43];
 pub const LAMP_RANGE: f32 = 60.0;
+/// How far above its base a lamp's light hangs at most. At a tall street lamp's top (40 units up) the ground
+/// under it got ~3% of the light, so no pool showed; the glass still glows at the head.
+pub const LAMP_HANG: f32 = 15.0;
+
+/// The height (y, growing down) a lamp's light sits at, for a lamp whose top is at `top_y` and base at `base_y`.
+pub fn lamp_light_y(top_y: f32, base_y: f32) -> f32 {
+    top_y.max(base_y - LAMP_HANG)
+}
+
+/// The lamp models' share of light at night: how deep the night is times the Lamp light row (0.5 as designed).
+pub fn lamp_strength(night: f32, lamp_light: f32) -> f32 {
+    night * lamp_light.clamp(0.0, 1.0) * 2.0
+}
 
 /// The light of a lamp model whose top is `head`.
 pub fn lamp_light(head: glam::Vec3) -> PointLightGpu {
@@ -230,6 +268,7 @@ pub fn lamp_light(head: glam::Vec3) -> PointLightGpu {
 /// the night is deep.
 pub fn night_lights(map: &[PointLightGpu], lamps: &[PointLightGpu], night: f32) -> Vec<PointLightGpu> {
     let mut all = map.to_vec();
+    // `night` carries the Lamp light row too (`lamp_strength`): above 1 the lamps burn brighter than designed
     if night > 0.0 {
         all.extend(lamps.iter().map(|l| PointLightGpu {
             position: l.position,

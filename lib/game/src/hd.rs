@@ -56,6 +56,12 @@ pub struct HdConfig {
     pub cloud_shadows: f32,
     /// Moonlit night outdoors (off: the original's mild dimming)
     pub night_look: bool,
+    /// How dark the night is outdoors, 0 to 1 (0.6: as designed; 0: dusk-like, 1: near black)
+    pub night_darkness: f32,
+    /// A warm light around the player at night outdoors (needs `night_look`)
+    pub player_light: bool,
+    /// How strongly lamp models light their surroundings at night, 0 to 1 (0.5: as designed, 0: none)
+    pub lamp_light: f32,
     /// The sun crosses the sky once an hour, dawn and dusk between day and night
     pub day_cycle: bool,
     /// Sun shadows: the share of sunlight a shadow takes away, 0 to 1 (0: none)
@@ -77,6 +83,9 @@ impl Default for HdConfig {
             scene_light: true,
             cloud_shadows: 0.6,
             night_look: true,
+            night_darkness: 0.6,
+            player_light: false,
+            lamp_light: 0.5,
             day_cycle: true,
             sun_shadows: 0.65,
         }

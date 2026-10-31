@@ -574,6 +574,9 @@ impl Config {
         nostalre_renderer::scene_light::SceneOptions {
             on: hd.scene_light,
             night_look: hd.night_look,
+            night_darkness: hd.night_darkness,
+            player_light: hd.player_light,
+            lamp_light: hd.lamp_light,
             clouds: hd.cloud_strength(),
             light_cap: hd.terrain_light_cap(),
             day_cycle: hd.day_cycle,

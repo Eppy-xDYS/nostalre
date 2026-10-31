@@ -110,6 +110,9 @@ pub struct WaterGlobalsUniform {
     pub time: f32,
     pub strength: f32,
     pub cell_size: f32,
+    /// The water's wave speed, so the bed's light moves with the waves the water draws
+    pub wave_speed: f32,
+    pub _pad: [f32; 3],
 }
 
 /// Maps a world XZ straight to a UV of the ground lightmap, so a model samples

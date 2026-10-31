@@ -907,12 +907,14 @@ fn face_uv_centre(node: &RsmNode, face: &nostalre_formats::rsm::RsmFace) -> [f32
     [sum[0] / 3.0, sum[1] / 3.0]
 }
 
-/// Where a lamp's light sits: the top centre of its box, in the world (up is -y).
+/// Where a lamp's light sits: over the centre of its box, at its top or `LAMP_HANG` above its base, whichever
+/// is lower, in the world (up is -y).
 fn lamp_head(rsm: &RsmFile, bbox: &BoundingBox, instance_matrix: &glam::Mat4) -> glam::Vec3 {
     let root = model_root_matrix(rsm, bbox);
     let corners = [bbox.min, bbox.max].map(|c| instance_matrix.transform_point3(root.transform_point3(c)));
     let centre = (corners[0] + corners[1]) * 0.5;
-    glam::Vec3::new(centre.x, corners[0].y.min(corners[1].y), centre.z)
+    let (top, base) = (corners[0].y.min(corners[1].y), corners[0].y.max(corners[1].y));
+    glam::Vec3::new(centre.x, crate::scene_light::lamp_light_y(top, base), centre.z)
 }
 
 struct ModelInstance {

@@ -8,6 +8,7 @@ pub mod classify;
 pub mod scatter;
 
 use nostalre_formats::gnd::GndFile;
+use nostalre_formats::map_water::MapWater;
 
 use crate::device::DEPTH_FORMAT;
 use crate::global_uniforms::GlobalUniforms;
@@ -88,7 +89,7 @@ pub struct GrassMap<'a> {
     pub name: &'a str,
     /// Per GND texture
     pub textures: &'a [TextureInfo],
-    pub water: Option<f32>,
+    pub water: Option<&'a MapWater>,
     /// Cells under a model floor
     pub floors: &'a [bool],
 }

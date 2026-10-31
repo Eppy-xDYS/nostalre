@@ -30,6 +30,9 @@ fn hd_options() -> SceneOptions {
     SceneOptions {
         on: true,
         night_look: true,
+        night_darkness: scene_light::NIGHT_DARKNESS,
+        player_light: true,
+        lamp_light: 0.5,
         clouds: 0.6,
         light_cap: 16,
         day_cycle: true,
@@ -136,11 +139,20 @@ fn night_lift_zero_by_day() {
 fn night_lift_restores_in_pool() {
     let lit = [0.1, 0.1, 0.15];
     let surface = [0.5, 0.4, 0.3];
-    let lm = [0.3, 0.25, 0.1];
+    let lm = [0.35, 0.3, 0.1];
     let day = [0.9, 0.9, 0.8];
     let out = scene_light::night_lift(lit, surface, lm, 1.0, day);
-    let want = [0.5 * 0.9 + 0.3, 0.4 * 0.9 + 0.25, 0.3 * 0.8 + 0.1];
+    let want = [0.5 * 0.9 + 0.35, 0.4 * 0.9 + 0.3, 0.3 * 0.8 + 0.1];
     assert!(close(out, want), "{out:?} vs {want:?}");
+}
+
+/// Only strong baked light (a lamp's pool) is lifted at night: a town's dim overall lightmap colour is not, or
+/// the whole town reads as day.
+#[test]
+fn night_lift_skips_dim_baked_light() {
+    let lit = [0.1, 0.1, 0.15];
+    let out = scene_light::night_lift(lit, [0.5, 0.4, 0.3], [0.07, 0.06, 0.05], 1.0, [0.9; 3]);
+    assert_eq!(out, lit);
 }
 
 #[test]
@@ -152,10 +164,24 @@ fn cloud_offset_wraps() {
     assert!(far[0] < 256.0 && far[1] < 256.0, "wrapped: {far:?}");
 }
 
+/// The Night darkness row: its default is the designed moonlight, 0 the S5 one, 1 near black, darker all the way.
+#[test]
+fn night_darkness_scales_the_moonlight() {
+    let (d, a) = scene_light::night_factors(scene_light::NIGHT_DARKNESS);
+    assert!(close(d, scene_light::NIGHT_DIFFUSE) && close(a, scene_light::NIGHT_AMBIENT), "{d:?} {a:?}");
+    let (d0, a0) = scene_light::night_factors(0.0);
+    assert!(close(d0, [0.30, 0.38, 0.50]) && close(a0, [0.50, 0.62, 0.80]));
+    let (d1, a1) = scene_light::night_factors(1.0);
+    assert!(d1.iter().chain(a1.iter()).all(|c| *c > 0.0 && *c < 0.25), "near black: {d1:?} {a1:?}");
+    for i in 0..3 {
+        assert!(d1[i] < d[i] && d[i] < d0[i] && a1[i] < a[i] && a[i] < a0[i]);
+    }
+}
+
 #[test]
 fn night_light_identity_by_day() {
     let base = day();
-    let out = scene_light::night_light(&base, 0.0);
+    let out = scene_light::night_light(&base, 0.0, scene_light::NIGHT_DARKNESS);
     assert_eq!(out.diffuse_color, base.diffuse_color);
     assert_eq!(out.ambient_color, base.ambient_color);
 }
@@ -163,14 +189,17 @@ fn night_light_identity_by_day() {
 #[test]
 fn night_light_blue_moonlight() {
     let base = day();
-    let out = scene_light::night_light(&base, 1.0);
-    let want_d = [1.0 * 0.30, 0.9 * 0.38, 0.8 * 0.50];
-    let want_a = [0.4 * 0.50, 0.4 * 0.62, 0.5 * 0.80];
+    let out = scene_light::night_light(&base, 1.0, scene_light::NIGHT_DARKNESS);
+    let (d, a) = (scene_light::NIGHT_DIFFUSE, scene_light::NIGHT_AMBIENT);
+    let want_d = [1.0 * d[0], 0.9 * d[1], 0.8 * d[2]];
+    let want_a = [0.4 * a[0], 0.4 * a[1], 0.5 * a[2]];
+    assert!(d[0] < d[1] && d[1] < d[2] && a[0] < a[2], "blue moonlight");
+    assert!(a.iter().all(|c| *c < 0.5), "dark: under half the day's sky");
     assert!(close([out.diffuse_color[0], out.diffuse_color[1], out.diffuse_color[2]], want_d));
     assert!(close([out.ambient_color[0], out.ambient_color[1], out.ambient_color[2]], want_a));
     assert_eq!(out.light_dir, base.light_dir);
     assert_eq!(out.glow, base.glow);
-    let half = scene_light::night_light(&base, 0.5);
+    let half = scene_light::night_light(&base, 0.5, scene_light::NIGHT_DARKNESS);
     assert!(half.diffuse_color[0] < base.diffuse_color[0] && half.diffuse_color[0] > want_d[0]);
 }
 
@@ -178,7 +207,7 @@ fn night_light_blue_moonlight() {
 fn sprite_light_darkens_with_ambient() {
     let base = day();
     assert!(close(scene_light::sprite_light(&base, &base), [1.0; 3]), "day: no change");
-    let night = scene_light::night_light(&base, 1.0);
+    let night = scene_light::night_light(&base, 1.0, scene_light::NIGHT_DARKNESS);
     let f = scene_light::sprite_light(&base, &night);
     assert!(f.iter().all(|c| *c < 0.75), "sprites darken at night: {f:?}");
     assert!(f[2] > f[0], "bluer at night: {f:?}");
@@ -216,7 +245,7 @@ fn renderer_light_hd_night() {
     let base = day();
     let opts = hd_options();
     let out = scene_light::frame_light(&base, [0.5, 0.5, 0.8], 1.0, true, false, &opts);
-    let moon = scene_light::night_light(&base, 1.0);
+    let moon = scene_light::night_light(&base, 1.0, scene_light::NIGHT_DARKNESS);
     assert_eq!(out.diffuse_color, moon.diffuse_color);
     assert_eq!(out.ambient_color, moon.ambient_color);
     assert_eq!(out.scene, [1.0, 1.0, 0.6, 16.0]);
@@ -282,13 +311,13 @@ fn light_uniform_size_128() {
 }
 
 const LIGHT_SHADERS: [(&str, &str); 7] = [
-    ("terrain", include_str!("../src/shaders/terrain.wgsl")),
+    ("terrain", nostalre_renderer::TERRAIN_WGSL),
     ("model", include_str!("../src/shaders/model.wgsl")),
     ("model_animated", include_str!("../src/shaders/model_animated.wgsl")),
     ("grass", include_str!("../src/shaders/grass.wgsl")),
     ("gr2_model", include_str!("../src/shaders/gr2_model.wgsl")),
     ("water", include_str!("../src/shaders/water.wgsl")),
-    ("water_hd", include_str!("../src/shaders/water_hd.wgsl")),
+    ("water_hd", nostalre_renderer::WATER_HD_WGSL),
 ];
 
 fn parse(name: &str, src: &str) -> naga::Module {
@@ -326,7 +355,7 @@ fn light_shaders_validate() {
 /// The terrain draws the lamps (S5): it reads the shared point-light uniform, laid out as the Rust one.
 #[test]
 fn terrain_reads_point_lights() {
-    let src = include_str!("../src/shaders/terrain.wgsl");
+    let src = nostalre_renderer::TERRAIN_WGSL;
     let module = parse("terrain", src);
     let span = module
         .types
@@ -384,7 +413,7 @@ fn actor_factor_identity_by_day_no_lamps() {
 #[test]
 fn actor_factor_day_look_in_pool_at_night() {
     let s = [0.45, 0.55, 0.75];
-    // a strong bake: still past the lift's top (0.2) after the treatment rolls it off
+    // a strong bake: still past the lift's top (0.18) after the treatment rolls it off
     let f = scene_light::actor_factor(s, [1.0, 0.95, 0.9], 1.0, [0.0; 3]);
     for i in 0..3 {
         assert!((f[i] * s[i] - 1.0).abs() < 1e-4, "channel {i}: {f:?}");
@@ -417,6 +446,28 @@ fn lamp_lights_from_models() {
     let c = scene_light::LAMP_COLOR;
     assert!(close([l.color_range[0], l.color_range[1], l.color_range[2]], c), "{l:?}");
     assert!(c[0] >= c[1] && c[1] >= c[2], "warm: {c:?}");
+}
+
+/// A tall lamp's light hangs low enough to light the ground under it (Y grows down); a short one stays at its
+/// head.
+#[test]
+fn tall_lamp_light_hangs_low() {
+    // a 40-unit street lamp standing on y = 10: light 15 above its base, not at its top
+    assert_eq!(scene_light::lamp_light_y(-30.0, 10.0), 10.0 - scene_light::LAMP_HANG);
+    // a 6-unit lantern: at its head
+    assert_eq!(scene_light::lamp_light_y(4.0, 10.0), 4.0);
+    // the ground under a tall lamp gets a visible share of its light
+    let under = scene_light::point_atten(scene_light::LAMP_HANG, scene_light::LAMP_RANGE);
+    assert!(under > 0.2, "{under}");
+}
+
+/// The Lamp light row scales the lamps: 50 % as designed, 100 % twice that, 0 % none.
+#[test]
+fn lamp_strength_follows_the_row() {
+    assert_eq!(scene_light::lamp_strength(1.0, 0.5), 1.0);
+    assert_eq!(scene_light::lamp_strength(1.0, 1.0), 2.0);
+    assert_eq!(scene_light::lamp_strength(1.0, 0.0), 0.0);
+    assert_eq!(scene_light::lamp_strength(0.0, 1.0), 0.0, "never by day");
 }
 
 /// The lamps join the map's lights only at night, fading with it; by day the map's own lights alone.

@@ -256,6 +256,7 @@ mod tests {
             })
             .collect();
         let gnd = GndFile {
+            water: None,
             version: (1, 7),
             width: 4,
             height: 4,
@@ -307,6 +308,7 @@ mod tests {
             color: [0; 192],
         };
         let gnd = GndFile {
+            water: None,
             version: (1, 7),
             width: 2,
             height: 1,

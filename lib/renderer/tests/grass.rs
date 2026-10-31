@@ -33,6 +33,7 @@ fn flat_cell(height: f32, surface_up: i32) -> GndCell {
 /// `size` × `size` flat cells, all on texture 0.
 fn field(size: i32) -> GndFile {
     GndFile {
+        water: None,
         version: (1, 7),
         width: size,
         height: size,

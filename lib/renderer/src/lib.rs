@@ -29,6 +29,17 @@ pub mod texture;
 pub mod ui_renderer;
 pub mod water;
 
+/// The terrain shader, after the water's waves it draws caustics from.
+pub const TERRAIN_WGSL: &str = concat!(
+    include_str!("shaders/water_waves.wgsl"),
+    include_str!("shaders/terrain.wgsl")
+);
+/// The HD water shader, after its waves.
+pub const WATER_HD_WGSL: &str = concat!(
+    include_str!("shaders/water_waves.wgsl"),
+    include_str!("shaders/water_hd.wgsl")
+);
+
 #[cfg(test)]
 pub(crate) mod test_support {
     /// wgpu's stub device: real buffers and bind groups, no GPU behind them.
@@ -103,6 +114,7 @@ pub const SPRITE_SHADER_SRC: &str = include_str!("shaders/sprite.wgsl");
 
 use nostalre_formats::fog_table::FogEntry;
 use nostalre_formats::gnd::GndFile;
+use nostalre_formats::map_water::map_water;
 use nostalre_formats::grf::GrfArchive;
 use nostalre_formats::rsm::RsmFile;
 use nostalre_formats::rsw::{RswFile, RswObject};
@@ -619,7 +631,7 @@ impl Renderer {
                 gnd,
                 name: map_name,
                 textures: &textures,
-                water: rsw.water.level,
+                water: map_water(&rsw.water, gnd).as_ref(),
                 floors: &self.model_floor_cells,
             },
             self.grass_tier,
@@ -663,6 +675,18 @@ impl Renderer {
         }
     }
 
+    /// HD water shows one shader term (see water_hd.wgsl), 0 off. False when this map has no water
+    /// to show it on.
+    pub fn set_water_debug(&mut self, term: u8) -> bool {
+        match &mut self.water_renderer {
+            Some(water) => {
+                water.set_debug(term);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn toggle_hd_water(&mut self) -> bool {
         self.hd_water = !self.hd_water;
         self.hd_water
@@ -681,6 +705,8 @@ impl Renderer {
     /// HD scene light rows (Settings), live.
     pub fn set_hd_scene(&mut self, scene: scene_light::SceneOptions) {
         self.scene = scene;
+        // the lamps and torch are picked again with the rows' new values
+        self.point_light_center = None;
         self.refresh_light();
     }
 
@@ -1059,8 +1085,17 @@ impl Renderer {
         tracing::info!("{} lamp models light the night", self.lamp_lights.len());
         self.point_light_center = None;
 
-        self.water_renderer = WaterRenderer::from_water_settings(
-            &rsw.water,
+        let water = map_water(&rsw.water, gnd);
+        tracing::info!(
+            "water: {}",
+            match &water {
+                None => "none".to_string(),
+                Some(_) if rsw.water.level.is_some() => "rsw".to_string(),
+                Some(w) => format!("gnd, {} zone(s), types {:?}", w.zones.len(), w.types()),
+            }
+        );
+        self.water_renderer = water.as_ref().and_then(|water| WaterRenderer::from_map_water(
+            water,
             gnd,
             grf,
             &self.device.device,
@@ -1068,7 +1103,7 @@ impl Renderer {
             &self.global_uniforms,
             &mut self.texture_cache,
             self.world_format,
-        );
+        ));
 
         self.skill_unit_models.clear();
         self.gr2_models.clear();
@@ -1382,8 +1417,11 @@ impl Renderer {
             .is_none_or(|c| c.distance(center) > 5.0)
             || torch_night != self.point_light_torch
         {
-            let torch = scene_light::torch(center, torch_night, !self.indoor);
-            let lights = scene_light::night_lights(&self.point_lights, &self.lamp_lights, torch_night);
+            // the player's own torch only when its Settings row is on
+            let torch = scene_light::torch(center, torch_night, !self.indoor)
+                .filter(|_| self.scene.player_light);
+            let lamps = scene_light::lamp_strength(torch_night, self.scene.lamp_light);
+            let lights = scene_light::night_lights(&self.point_lights, &self.lamp_lights, lamps);
             let nearest = global_uniforms::nearest_point_lights(&lights, center, torch);
             self.global_uniforms
                 .update_point_lights(&self.device.queue, &nearest);
@@ -1846,7 +1884,7 @@ mod tests {
     fn every_shader_is_valid_wgsl() {
         let shaders: [(&str, &str); 16] = [
             ("sprite", SPRITE_SHADER_SRC),
-            ("terrain", include_str!("shaders/terrain.wgsl")),
+            ("terrain", TERRAIN_WGSL),
             ("model", include_str!("shaders/model.wgsl")),
             (
                 "model_animated",
@@ -1854,7 +1892,7 @@ mod tests {
             ),
             ("gr2_model", include_str!("shaders/gr2_model.wgsl")),
             ("water", include_str!("shaders/water.wgsl")),
-            ("water_hd", include_str!("shaders/water_hd.wgsl")),
+            ("water_hd", WATER_HD_WGSL),
             ("ground_proxy", include_str!("shaders/ground_proxy.wgsl")),
             ("grid_selector", include_str!("shaders/grid_selector.wgsl")),
             ("ui", include_str!("shaders/ui.wgsl")),

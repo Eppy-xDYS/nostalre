@@ -397,7 +397,7 @@ pub(super) fn image(ui: &mut UiFrame, r: Rect, path: String, tint: [f32; 4]) {
 }
 
 /// The wheel over `area`: 1 a row down, -1 up, 0 for none
-fn wheel_step(ui: &mut UiFrame, area: Rect) -> isize {
+pub(super) fn wheel_step(ui: &mut UiFrame, area: Rect) -> isize {
     let wheel = ui.take_scroll(area);
     if wheel > 0.0 {
         -1

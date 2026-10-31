@@ -37,6 +37,9 @@ fn hd_rows_on_graphics_page() {
             Opt::SceneLight,
             Opt::CloudShadows,
             Opt::NightLook,
+            Opt::NightDarkness,
+            Opt::PlayerLight,
+            Opt::LampLight,
             Opt::DayCycle,
             Opt::SunShadows,
             Opt::Grade,
@@ -273,6 +276,57 @@ fn cloud_slider() {
 }
 
 #[test]
+fn player_light_row_off_by_default() {
+    let rows: Vec<Opt> = Page::Graphics
+        .entries()
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Opt(o) => Some(*o),
+            Entry::Section(_) => None,
+        })
+        .collect();
+    let night = rows.iter().position(|o| *o == Opt::NightLook).unwrap();
+    assert_eq!(rows[night + 2], Opt::PlayerLight, "after Night look and Night darkness");
+    assert_eq!(Opt::PlayerLight.label(), "Player light");
+    assert!(!Opt::PlayerLight.help().contains("restart"), "live");
+    let mut v = values();
+    assert!(matches!(Opt::PlayerLight.shown_value(&mut v), Shown::Toggle(false)), "off by default");
+    assert!(Opt::PlayerLight.change(&mut v, Change::Flip));
+    assert!(v.graphics.hd.player_light);
+    let mut defaults = values();
+    assert!(Opt::PlayerLight.reset(&mut v, &mut defaults));
+    assert!(!v.graphics.hd.player_light);
+}
+
+#[test]
+fn night_darkness_slider() {
+    let mut v = values();
+    assert!(matches!(Opt::NightDarkness.shown_value(&mut v), Shown::Slider(60)), "as designed by default");
+    assert!(Opt::NightDarkness.change(&mut v, Change::Next));
+    assert!((v.graphics.hd.night_darkness - 0.65).abs() < 1e-6);
+    let mut defaults = values();
+    assert!(Opt::NightDarkness.reset(&mut v, &mut defaults));
+    assert!((v.graphics.hd.night_darkness - 0.6).abs() < 1e-6);
+    assert!(!Opt::NightDarkness.help().contains("restart"), "live");
+}
+
+#[test]
+fn lamp_light_slider() {
+    let mut v = values();
+    assert!(matches!(Opt::LampLight.shown_value(&mut v), Shown::Slider(50)), "as designed by default");
+    assert!(Opt::LampLight.change(&mut v, Change::Next));
+    assert!((v.graphics.hd.lamp_light - 0.55).abs() < 1e-6);
+    for _ in 0..30 {
+        Opt::LampLight.change(&mut v, Change::Prev);
+    }
+    assert_eq!(v.graphics.hd.lamp_light, 0.0, "0 %: off");
+    let mut defaults = values();
+    assert!(Opt::LampLight.reset(&mut v, &mut defaults));
+    assert!((v.graphics.hd.lamp_light - 0.5).abs() < 1e-6);
+    assert!(Opt::LampLight.help().contains("0%: off"));
+}
+
+#[test]
 fn day_cycle_row_after_night_look() {
     let rows: Vec<Opt> = Page::Graphics
         .entries()
@@ -283,7 +337,7 @@ fn day_cycle_row_after_night_look() {
         })
         .collect();
     let night = rows.iter().position(|o| *o == Opt::NightLook).unwrap();
-    assert_eq!(rows[night + 1], Opt::DayCycle, "right after Night look");
+    assert_eq!(rows[night + 4], Opt::DayCycle, "after Night look and its rows");
     assert_eq!(Opt::DayCycle.label(), "Day cycle");
     assert!(!Opt::DayCycle.help().contains("restart"), "live");
     let mut v = values();

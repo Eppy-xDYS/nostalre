@@ -374,6 +374,22 @@ impl App {
                         .add_system(format!("Water: {status}"));
                 }
             }
+            ChatCommand::WaterDebug(term) => {
+                if let Some(renderer) = &mut self.renderer {
+                    let message = if renderer.set_water_debug(term) {
+                        format!("Water debug: {term}")
+                    } else {
+                        "Water debug: this map has no water".to_string()
+                    };
+                    self.windows.chat_window.add_system(message);
+                }
+            }
+            ChatCommand::WaterDebugUsage => {
+                self.windows.chat_window.add_system(
+                    "Usage: /waterdebug 0-5 (1 depth, 2 normal, 3 fresnel, 4 refracted, 5 glitter) or off"
+                        .to_string(),
+                );
+            }
             ChatCommand::ToggleAura => {
                 let mut display = self.config.display.clone();
                 display.show_level_aura = !display.show_level_aura;

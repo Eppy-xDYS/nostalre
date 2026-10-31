@@ -216,6 +216,7 @@ mod tests {
 
     fn make_gnd() -> GndFile {
         GndFile {
+            water: None,
             version: (1, 7),
             width: 10,
             height: 10,

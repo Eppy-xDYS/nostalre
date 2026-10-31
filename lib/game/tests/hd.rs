@@ -297,6 +297,17 @@ fn sky_parses() {
 }
 
 #[test]
+fn waterdebug_parses_0_to_5() {
+    for n in 0..=5u8 {
+        assert_eq!(parse_chat_command(&format!("/waterdebug {n}")), ChatCommand::WaterDebug(n));
+    }
+    assert_eq!(parse_chat_command("/waterdebug off"), ChatCommand::WaterDebug(0));
+    for bad in ["/waterdebug", "/waterdebug 6", "/waterdebug -1", "/waterdebug glitter"] {
+        assert_eq!(parse_chat_command(bad), ChatCommand::WaterDebugUsage, "{bad}");
+    }
+}
+
+#[test]
 fn shadow_defaults_and_tier() {
     let config = HdConfig::default();
     assert_eq!(config.sun_shadows, 0.65);

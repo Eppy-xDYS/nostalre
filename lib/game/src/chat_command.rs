@@ -30,6 +30,9 @@ pub enum ChatCommand {
     Sky(Option<u32>),
     SkyUsage,
     ToggleHdWater,
+    /// HD water shows one shader term (0 off; 1 depth, 2 normal, 3 fresnel, 4 refracted, 5 glitter)
+    WaterDebug(u8),
+    WaterDebugUsage,
     ToggleLightmap,
     ToggleAura,
     ToggleNoTrade,
@@ -163,6 +166,7 @@ pub const COMMAND_HELP: &[(&str, &str)] = &[
     ("/fog", "Turns fog on and off."),
     ("/lightmap", "Turns ground lightmaps on and off."),
     ("/hdwater", "Switches between HD and classic water."),
+    ("/waterdebug <0-5|off>", "Shows one HD water term: 1 depth, 2 normal, 3 fresnel, 4 refracted, 5 glitter."),
     ("/sky <MM:SS|off>", "Previews that minute of the hour's HD day cycle (off: the clock)."),
     ("/aura", "Minimizes level 99 aura effects."),
     ("/bgm", "Turns background music on and off."),
@@ -241,6 +245,17 @@ fn parse_sky(args: &str) -> ChatCommand {
     }
 }
 
+/// `0`-`5` or `off`.
+fn parse_water_debug(args: &str) -> ChatCommand {
+    if args.eq_ignore_ascii_case("off") {
+        return ChatCommand::WaterDebug(0);
+    }
+    match args.parse::<u8>() {
+        Ok(n) if n <= 5 => ChatCommand::WaterDebug(n),
+        _ => ChatCommand::WaterDebugUsage,
+    }
+}
+
 fn parse_volume(args: &str) -> Option<u8> {
     args.parse::<u8>().ok().map(|v| v.min(127))
 }
@@ -296,6 +311,7 @@ pub fn parse_chat_command(input: &str) -> ChatCommand {
         "/hd" => ChatCommand::ToggleHd,
         "/sky" => parse_sky(args),
         "/hdwater" => ChatCommand::ToggleHdWater,
+        "/waterdebug" => parse_water_debug(args),
         "/aura" => ChatCommand::ToggleAura,
         "/notrade" | "/nt" => ChatCommand::ToggleNoTrade,
         "/noshift" | "/ns" => ChatCommand::ToggleNoShift,

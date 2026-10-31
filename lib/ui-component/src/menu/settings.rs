@@ -81,6 +81,9 @@ enum Opt {
     SceneLight,
     CloudShadows,
     NightLook,
+    NightDarkness,
+    PlayerLight,
+    LampLight,
     DayCycle,
     SunShadows,
     Grade,
@@ -143,6 +146,9 @@ impl Opt {
             Self::SceneLight => "Scene light",
             Self::CloudShadows => "Cloud shadows",
             Self::NightLook => "Night look",
+            Self::NightDarkness => "Night darkness",
+            Self::PlayerLight => "Player light",
+            Self::LampLight => "Lamp light",
             Self::DayCycle => "Day cycle",
             Self::SunShadows => "Sun shadows",
             Self::Grade => "Colour grade",
@@ -188,7 +194,10 @@ impl Opt {
             Self::Grass => "Swaying grass on fields and meadows. 0%: off.",
             Self::SceneLight => "Softer baked light and shadows; street lamps light the ground.",
             Self::CloudShadows => "Cloud shadows drifting over the land outdoors. 0%: off.",
-            Self::NightLook => "A moonlit night outdoors, lamps and a torch around you. Off: the original's.",
+            Self::NightLook => "A moonlit night outdoors with lamps lighting the ground. Off: the original's.",
+            Self::NightDarkness => "How dark nights are outdoors (with Night look). 0%: dusk-like, 100%: near black.",
+            Self::PlayerLight => "A warm light around you at night outdoors (with Night look).",
+            Self::LampLight => "How brightly street lamps and lanterns light the ground at night. 0%: off.",
             Self::DayCycle => "The sun crosses the sky once an hour: dawn, golden dusk, night. Off: always midday.",
             Self::SunShadows => "Trees and buildings cast shadows that follow the sun. Not on Low. 0%: off.",
             Self::Grade => "A colour mood per map: warm towns, green fields, cold ruins. 0%: off.",
@@ -208,6 +217,8 @@ impl Opt {
             | Self::SunGlow
             | Self::Grass
             | Self::CloudShadows
+            | Self::LampLight
+            | Self::NightDarkness
             | Self::SunShadows
             | Self::Grade => None,
             _ => Some("toggle"),
@@ -256,6 +267,7 @@ impl Opt {
             Self::Vignette => &mut g.hd.vignette,
             Self::SceneLight => &mut g.hd.scene_light,
             Self::NightLook => &mut g.hd.night_look,
+            Self::PlayerLight => &mut g.hd.player_light,
             Self::DayCycle => &mut g.hd.day_cycle,
             Self::Scale
             | Self::Hud
@@ -268,6 +280,8 @@ impl Opt {
             | Self::SunGlow
             | Self::Grass
             | Self::CloudShadows
+            | Self::LampLight
+            | Self::NightDarkness
             | Self::SunShadows
             | Self::Grade => return None,
         })
@@ -282,6 +296,8 @@ impl Opt {
             Self::SunGlow => Some(&mut v.graphics.hd.sun_glow),
             Self::Grass => Some(&mut v.graphics.hd.grass),
             Self::CloudShadows => Some(&mut v.graphics.hd.cloud_shadows),
+            Self::LampLight => Some(&mut v.graphics.hd.lamp_light),
+            Self::NightDarkness => Some(&mut v.graphics.hd.night_darkness),
             Self::SunShadows => Some(&mut v.graphics.hd.sun_shadows),
             Self::Grade => Some(&mut v.graphics.hd.grade),
             _ => None,
@@ -530,6 +546,9 @@ impl Page {
                 O(Opt::SceneLight),
                 O(Opt::CloudShadows),
                 O(Opt::NightLook),
+                O(Opt::NightDarkness),
+                O(Opt::PlayerLight),
+                O(Opt::LampLight),
                 O(Opt::DayCycle),
                 O(Opt::SunShadows),
                 O(Opt::Grade),
@@ -631,6 +650,8 @@ pub(super) struct Settings {
     editing: Option<TextInput>,
     /// What the last key press did, said in the help line until the next move
     note: Option<String>,
+    /// How far an option page is scrolled down, in pixels
+    scroll: f32,
 }
 
 impl Settings {
@@ -790,6 +811,7 @@ impl Settings {
         if page != self.page {
             self.page = page;
             self.picked = 0;
+            self.scroll = 0.0;
         }
         self.capturing = None;
         self.editing = None;
@@ -878,17 +900,59 @@ impl Settings {
             }
         }
 
-        let mut y = area.y;
-        let mut index = 0;
+        // where each entry sits on the unscrolled page, to scroll it: the wheel, and the picked row kept in
+        // sight after a key moved it; only entries wholly in the area are drawn
+        let heading_h = style::line(ui) + 8.0;
+        let mut tops = Vec::new();
+        let mut bottom = 0.0;
+        let mut picked_top = 0.0;
+        let mut shown = 0;
         for (n, entry) in page.entries().iter().enumerate() {
             match entry {
-                Entry::Section(heading) => {
+                Entry::Section(_) => {
                     if n > 0 {
-                        y += SECTION_GAP;
+                        bottom += SECTION_GAP;
                     }
-                    y = frame::section(ui, area.x, y, area.w, heading);
+                    tops.push(bottom);
+                    bottom += heading_h;
                 }
                 Entry::Opt(opt) if opt.shown() => {
+                    if shown == self.picked {
+                        picked_top = bottom;
+                    }
+                    tops.push(bottom);
+                    bottom += ROW_H;
+                    shown += 1;
+                }
+                Entry::Opt(_) => tops.push(f32::NAN),
+            }
+        }
+        self.scroll += frame::wheel_step(ui, area) as f32 * ROW_H * 2.0;
+        if self.picked != before {
+            if picked_top < self.scroll {
+                self.scroll = picked_top;
+            } else if picked_top + ROW_H > self.scroll + area.h {
+                self.scroll = picked_top + ROW_H - area.h;
+            }
+        }
+        self.scroll = self.scroll.clamp(0.0, (bottom - area.h).max(0.0));
+        let in_view = |top: f32, h: f32| top >= self.scroll - 0.5 && top + h <= self.scroll + area.h + 0.5;
+
+        let mut index = 0;
+        for (n, entry) in page.entries().iter().enumerate() {
+            let top = tops[n];
+            let y = area.y + top - self.scroll;
+            match entry {
+                Entry::Section(heading) => {
+                    if in_view(top, heading_h) {
+                        frame::section(ui, area.x, y, area.w, heading);
+                    }
+                }
+                Entry::Opt(opt) if opt.shown() => {
+                    if !in_view(top, ROW_H) {
+                        index += 1;
+                        continue;
+                    }
                     let rect = Rect::new(area.x, y, area.w, ROW_H);
                     let id = WidgetId(ROW_BASE_ID + index as u32);
                     let resp = frame::row(ui, id, rect, index == self.picked);
@@ -911,7 +975,6 @@ impl Settings {
                             changed.push(*opt);
                         }
                     }
-                    y += ROW_H;
                     index += 1;
                 }
                 Entry::Opt(_) => {}

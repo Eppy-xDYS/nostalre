@@ -45,6 +45,11 @@ struct WaterGlobals {
     time: f32,
     strength: f32,
     cell_size: f32,
+    // the water's wave speed: the bed's light moves with the waves above it
+    wave_speed: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
@@ -127,7 +132,7 @@ fn cloud_shadow(world: vec3<f32>) -> f32 {
 
 // at night, a pixel in a baked light pool goes back toward its daylit look: lamps and the walls round them stay lit
 fn night_lift(lit: vec3<f32>, surface: vec3<f32>, lm: vec3<f32>) -> vec3<f32> {
-    let k = smoothstep(0.02, 0.2, max(lm.r, max(lm.g, lm.b))) * light.scene.y;
+    let k = smoothstep(0.08, 0.18, max(lm.r, max(lm.g, lm.b))) * light.scene.y;
     return mix(lit, surface * light.day_light.rgb + lm, k);
 }
 
@@ -257,48 +262,32 @@ fn apply_fog(color: vec3<f32>, view_pos: vec3<f32>) -> vec3<f32> {
     return mix(color, fog.color.rgb, fog_amount);
 }
 
-fn caustic_hash(p: vec2<f32>) -> vec2<f32> {
-    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * vec3<f32>(0.1031, 0.1030, 0.0973));
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.xx + p3.yz) * p3.zy);
-}
+// Water bends sunlight toward the normal as it enters (Snell's law, water 1.333). Under a surface that
+// bulges up the rays meet and the bed is brighter; under a dip they part and it is darker. For gentle waves
+// the light reaching the bed is about 1 - (1 - 1/1.333) * depth * Laplacian(height): no rays traced, and
+// the same waves as the water (water_waves.wgsl), so the light moves with the surface you see.
+const WATER_FOCUS: f32 = 0.25;
+// gentle RO waves bend light too little to see; this scales the focusing, not where it falls
+const CAUSTIC_GAIN: f32 = 6.0;
 
-// One layer of caustic light: the thin network where two Voronoi cells meet (F2 - F1 small), cell points
-// drifting so the network wanders.
-fn caustic_layer(p: vec2<f32>, t: f32) -> f32 {
-    let ip = floor(p);
-    let fp = p - ip;
-    var f1 = 8.0;
-    var f2 = 8.0;
-    for (var y = -1; y <= 1; y++) {
-        for (var x = -1; x <= 1; x++) {
-            let nb = vec2<f32>(f32(x), f32(y));
-            let h = caustic_hash(ip + nb);
-            let o = 0.5 + 0.4 * sin(t + 6.2831 * h);
-            let d = length(nb + o - fp);
-            if (d < f1) {
-                f2 = f1;
-                f1 = d;
-            } else if (d < f2) {
-                f2 = d;
-            }
-        }
-    }
-    return 1.0 - smoothstep(0.0, 0.14, f2 - f1);
-}
-
-// Caustics on ground under the water, fading in from the waterline and out with depth.
+// Light on ground under the water, relative to the sun reaching it: positive where the waves focus it,
+// negative where they spread it; fading in from the waterline and out with depth.
 fn caustics(world: vec3<f32>) -> f32 {
     let depth = (world.y - water_globals.level) / water_globals.cell_size;
     if (water_globals.strength <= 0.0 || depth <= 0.0) {
         return 0.0;
     }
-    let p = world.xz / water_globals.cell_size * 0.8;
-    let t = water_globals.time * 0.6;
-    let a = caustic_layer(p, t);
-    let b = caustic_layer(vec2<f32>(p.x * 0.866 - p.y * 0.5, p.x * 0.5 + p.y * 0.866) * 1.3 + 17.0, t * 1.3);
+    let p = world.xz / water_globals.cell_size;
+    let speed = wave_drift_speed(water_globals.wave_speed);
+    // the water's own wave size for this depth (water_hd.wgsl): shallow water carries small waves
+    let amp = mix(0.08, 0.30, smoothstep(0.0, 1.2, depth));
+    let bend = wave_laplacian(p, water_globals.time, speed) * amp;
+    let focus = 1.0 - WATER_FOCUS * CAUSTIC_GAIN * min(depth, 2.5) * bend;
+    // focused light gathers into thin bright lines, spread light only dims a little
+    let light = clamp(focus, 0.0, 3.0);
+    let c = select(light - 1.0, (light * light - 1.0) * 0.5, light > 1.0);
     let fade = smoothstep(0.0, 0.3, depth) * exp(-depth * 0.45);
-    return max(a, b) * fade * water_globals.strength;
+    return c * fade * water_globals.strength;
 }
 
 struct VertexInput {

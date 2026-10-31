@@ -86,6 +86,8 @@ fn point_light_attenuation(d: f32, r: f32) -> f32 {
     return a * a;
 }
 
+const POINT_WRAP: f32 = 0.6;
+
 fn point_light_contribution(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     var acc = vec3<f32>(0.0);
     let count = point_lights.count;
@@ -98,7 +100,9 @@ fn point_light_contribution(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32
         let d = length(to_frag);
         if (d >= lr) { continue; }
         let dir = to_frag / max(d, 1e-4);
-        let lambert = max(-dot(dir, normal), 0.0);
+        // wrapped: a face turned away still catches some, so a lamp's own post and base (its light sits
+        // inside the post) and the sides of things beside it are not left black next to a bright pool
+        let lambert = max((-dot(dir, normal) + POINT_WRAP) / (1.0 + POINT_WRAP), 0.0);
         acc += lc * lambert * point_light_attenuation(d, lr);
     }
     return acc;

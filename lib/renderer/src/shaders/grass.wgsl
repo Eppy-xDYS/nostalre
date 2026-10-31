@@ -234,7 +234,7 @@ fn cloud_shadow(world: vec3<f32>) -> f32 {
 
 // at night, a pixel in a baked light pool goes back toward its daylit look: lamps and the walls round them stay lit
 fn night_lift(lit: vec3<f32>, surface: vec3<f32>, lm: vec3<f32>) -> vec3<f32> {
-    let k = smoothstep(0.02, 0.2, max(lm.r, max(lm.g, lm.b))) * light.scene.y;
+    let k = smoothstep(0.08, 0.18, max(lm.r, max(lm.g, lm.b))) * light.scene.y;
     return mix(lit, surface * light.day_light.rgb + lm, k);
 }
 

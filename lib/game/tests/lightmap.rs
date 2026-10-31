@@ -21,6 +21,7 @@ fn split_map() -> (GndFile, GatFile) {
         },
     ];
     let gnd = GndFile {
+        water: None,
         version: (1, 7),
         width: 4,
         height: 4,

@@ -151,13 +151,13 @@ fn shadow_uniform_size() {
 }
 
 const WORLD_SHADERS: [(&str, &str); 7] = [
-    ("terrain", include_str!("../src/shaders/terrain.wgsl")),
+    ("terrain", nostalre_renderer::TERRAIN_WGSL),
     ("model", include_str!("../src/shaders/model.wgsl")),
     ("model_animated", include_str!("../src/shaders/model_animated.wgsl")),
     ("grass", include_str!("../src/shaders/grass.wgsl")),
     ("gr2_model", include_str!("../src/shaders/gr2_model.wgsl")),
     ("water", include_str!("../src/shaders/water.wgsl")),
-    ("water_hd", include_str!("../src/shaders/water_hd.wgsl")),
+    ("water_hd", nostalre_renderer::WATER_HD_WGSL),
 ];
 
 fn parse(name: &str, src: &str) -> naga::Module {

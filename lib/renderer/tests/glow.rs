@@ -235,7 +235,7 @@ fn light_uniform_glow_offset() {
 #[test]
 fn shaders_declare_glow() {
     for (name, src) in [
-        ("terrain", include_str!("../src/shaders/terrain.wgsl")),
+        ("terrain", nostalre_renderer::TERRAIN_WGSL),
         ("model", include_str!("../src/shaders/model.wgsl")),
         ("model_animated", include_str!("../src/shaders/model_animated.wgsl")),
     ] {
