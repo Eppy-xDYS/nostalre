@@ -1,5 +1,5 @@
 use nostalre_formats::grf::GrfArchive;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 mod emotion;
 
@@ -10,7 +10,10 @@ pub struct TextureCache {
     sizes: HashMap<String, (u32, u32)>,
     pub bind_group_layout: wgpu::BindGroupLayout,
     filter_world: bool,
+    /// Ground-and-model style textures (point or world filtered): one map's models and water, plus the pinned
     world_textures: Vec<String>,
+    /// World textures kept across maps (the grid cursor), loaded once
+    pinned: HashSet<String>,
     /// Ground textures, sampled without wrapping. A cell maps the whole texture,
     /// so a repeating sampler blends the far edge in at every cell boundary.
     ground: HashMap<String, wgpu::BindGroup>,
@@ -46,6 +49,7 @@ impl TextureCache {
             bind_group_layout,
             filter_world: true,
             world_textures: Vec::new(),
+            pinned: HashSet::new(),
             ground: HashMap::new(),
         }
     }
@@ -74,6 +78,30 @@ impl TextureCache {
             self.ground.remove(&name);
             self.get_or_load_ground(&name, grf, device, queue);
         }
+    }
+
+    /// Keeps `name` across `clear_map_textures`.
+    pub fn pin(&mut self, name: &str) {
+        self.pinned.insert(name.to_string());
+    }
+
+    /// Drops the last map's ground, model and water textures, so a long session holds one map's worth, not every
+    /// map's. Sprites, effects, UI and pinned textures stay.
+    pub fn clear_map_textures(&mut self) {
+        let (keep, drop) = split_map_textures(std::mem::take(&mut self.world_textures), &self.pinned);
+        for name in &drop {
+            self.remove(name);
+        }
+        self.world_textures = keep;
+        for name in self.ground.keys() {
+            self.sizes.remove(name);
+        }
+        self.ground.clear();
+    }
+
+    /// How many map textures are held (ground plus world): for tests and the log.
+    pub fn map_texture_count(&self) -> usize {
+        self.world_textures.len() + self.ground.len()
     }
 
     pub fn get_or_load(
@@ -368,6 +396,11 @@ pub fn average_color(name: &str, grf: &GrfArchive) -> Option<[f32; 3]> {
         n += 1;
     }
     (n > 0).then(|| sum.map(|s| (s / n as f64 / 255.0) as f32))
+}
+
+/// The world textures to keep (pinned) and to drop (the last map's), in their order.
+pub fn split_map_textures(world: Vec<String>, pinned: &HashSet<String>) -> (Vec<String>, Vec<String>) {
+    world.into_iter().partition(|name| pinned.contains(name))
 }
 
 fn decode_texture(name: &str, grf: &GrfArchive) -> Option<image::RgbaImage> {

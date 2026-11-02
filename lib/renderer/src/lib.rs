@@ -991,6 +991,9 @@ impl Renderer {
         fog: Option<FogEntry>,
     ) {
         self.set_fog(fog);
+        let held = self.texture_cache.map_texture_count();
+        self.texture_cache.clear_map_textures();
+        tracing::info!("map textures: dropped the last map's ({held} held, pinned kept)");
 
         let center_x = gnd.width as f32 * gnd.zoom / 2.0;
         let center_z = gnd.height as f32 * gnd.zoom / 2.0;
@@ -1164,6 +1167,8 @@ impl Renderer {
     /// One effect texture into the cache, kept for a filtering change; false when the archive lacks it
     pub fn load_effect_texture(&mut self, path: &str, grf: &GrfArchive) -> bool {
         if self.texture_cache.get(path).is_some() {
+            // a map model may have loaded it first: keep it past that map
+            self.texture_cache.pin(path);
             return true;
         }
         let address_mode = if nostalre_effects::texture_wraps(path) {
