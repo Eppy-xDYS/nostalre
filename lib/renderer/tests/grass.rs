@@ -133,12 +133,22 @@ fn cell_needs_top_surface() {
 
 #[test]
 fn cell_rejects_steep() {
+    // grass grows up grassy slopes (to about 45 degrees: 10 units over a 10-unit cell), not up cliffs
     let mut gnd = field(2);
-    gnd.cells[0].height_ne = -2.6;
-    gnd.cells[1].height_ne = -2.4;
+    gnd.cells[0].height_ne = -10.1;
+    gnd.cells[1].height_ne = -9.9;
     let tex = grass_texture();
     assert_eq!(classify::cell_grows(&gnd, 0, 0, &tex, None), None);
     assert_eq!(classify::cell_grows(&gnd, 1, 0, &tex, None), Some(Ground::Grass));
+}
+
+#[test]
+fn slopes_grow_thinner() {
+    assert_eq!(classify::slope_share(0.0), 1.0);
+    assert_eq!(classify::slope_share(classify::FULL_DENSITY_SPREAD), 1.0, "gentle ground at full density");
+    let steep = classify::slope_share(classify::MAX_HEIGHT_SPREAD);
+    assert!((steep - 0.4).abs() < 1e-6, "{steep}");
+    assert!(classify::slope_share(6.0) < 1.0 && classify::slope_share(6.0) > steep, "thinning on the way");
 }
 
 #[test]
@@ -295,7 +305,7 @@ fn tuft_height_bounded() {
     let gnd = field(16);
     let tufts = all_tufts(&grass_field(&gnd, &grass_texture(), "m", &[]), Tier::Ultra, 1.0);
     // under a character's waist
-    assert!(tufts.iter().all(|t| t.height() > 0.0 && t.height() <= TUFT_MAX_HEIGHT.min(8.0)));
+    assert!(tufts.iter().all(|t| t.height() > 0.0 && t.height() <= TUFT_MAX_HEIGHT.min(10.0)));
 }
 
 // K3 chunks: which to keep, which to draw

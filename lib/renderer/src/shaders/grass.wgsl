@@ -67,7 +67,7 @@ struct GrassUniforms {
 // twins of grass/scatter.rs
 const SIZE_MIN: f32 = 0.85;
 const SIZE_MAX: f32 = 1.6;
-const MAX_HEIGHT: f32 = 7.0;
+const MAX_HEIGHT: f32 = 9.5;
 // a quad stands this share of its height above the root; the rest sinks into the ground so no tuft floats on a slope
 const ABOVE: f32 = 0.88;
 const MAX_LEAN: f32 = 0.16;

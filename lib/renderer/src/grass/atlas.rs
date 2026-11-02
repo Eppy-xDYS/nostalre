@@ -2,7 +2,7 @@
 //! them) and darker at the root. Row 0 is the tips. The mips keep the full size's coverage, so far grass does not
 //! thin out as its alpha averages down.
 
-pub const ATLAS_WIDTH: u32 = 256;
+pub const ATLAS_WIDTH: u32 = 480;
 pub const ATLAS_HEIGHT: u32 = 128;
 pub const VARIANTS: usize = 4;
 /// Mips stop here: grass is gone before it is this small on screen
@@ -117,12 +117,12 @@ pub fn blade_atlas() -> Vec<Vec<u8>> {
     let vw = w / VARIANTS;
     for v in 0..VARIANTS {
         // many fine blades: the tufts read as a soft carpet, not as separate spikes
-        let blades = 22 + rng.below(8);
+        let blades = 41 + rng.below(15);
         for _ in 0..blades {
             let root_x = (v * vw) as f32 + vw as f32 * (0.12 + 0.76 * rng.unit());
             let tall = h as f32 * (0.4 + 0.58 * rng.unit());
             let bend = (rng.unit() - 0.5) * vw as f32 * 0.4;
-            let width = 1.6 + 1.6 * rng.unit();
+            let width = 2.0 + 2.0 * rng.unit();
             let tone = 0.85 + 0.15 * rng.unit();
             draw_blade(&mut coverage, &mut shade, w, h, root_x, tall, bend, width, tone);
         }

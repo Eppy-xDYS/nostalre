@@ -48,9 +48,9 @@ impl Tier {
     }
 }
 
-/// The tallest tuft stands this far above its root: about the height of a character's thigh. Each tuft is one
+/// The tallest tuft stands this far above its root: about a character's hip. Each tuft is one
 /// whole clump of blades, so a few per cell cover the ground.
-pub const TUFT_MAX_HEIGHT: f32 = 7.0;
+pub const TUFT_MAX_HEIGHT: f32 = 9.5;
 const SIZE_MIN: f32 = 0.85;
 const SIZE_MAX: f32 = 1.6;
 /// Sparse ground (hills, dirt) gets this share of a grass cell's tufts.
@@ -116,7 +116,11 @@ impl GrassField {
                     Some(ground) => {
                         let surface = &gnd.surfaces[cell.surface_up as usize];
                         let rgb = input.textures[surface.texture_id as usize].rgb;
-                        (if ground == Ground::Sparse { SPARSE_SHARE } else { 1.0 }, rgb)
+                        let base = if ground == Ground::Sparse { SPARSE_SHARE } else { 1.0 };
+                        let (low, high) = heights
+                            .iter()
+                            .fold((f32::MAX, f32::MIN), |(lo, hi), &h| (lo.min(h), hi.max(h)));
+                        (base * classify::slope_share(high - low), rgb)
                     }
                     None => (0.0, [0.0; 3]),
                 };

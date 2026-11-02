@@ -26,7 +26,17 @@ const SPARSE_WORDS: [&str; 2] = ["언덕", "흙"];
 const NEVER_WORDS: [&str; 8] = ["절벽", "물바닥", "바위", "도시", "맨땅", "wall", "backside", "black"];
 
 /// Corners further apart than this (one cell is 10 wide) are a slope too steep for grass.
-pub const MAX_HEIGHT_SPREAD: f32 = 2.5;
+pub const MAX_HEIGHT_SPREAD: f32 = 10.0;
+/// Below this spread a cell grows at full density; above it thinner, to `STEEP_SHARE` at `MAX_HEIGHT_SPREAD`.
+/// (2.5 was the limit once: a third of grassy cells on hilly fields grew nothing.)
+pub const FULL_DENSITY_SPREAD: f32 = 2.5;
+const STEEP_SHARE: f32 = 0.4;
+
+/// The share of tufts a cell whose corner heights spread this much grows.
+pub fn slope_share(spread: f32) -> f32 {
+    let t = ((spread - FULL_DENSITY_SPREAD) / (MAX_HEIGHT_SPREAD - FULL_DENSITY_SPREAD)).clamp(0.0, 1.0);
+    1.0 + (STEEP_SHARE - 1.0) * t
+}
 /// Ground darker than this is a filler or a shadowed pit.
 const MIN_LUMA: f32 = 0.1;
 
