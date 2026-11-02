@@ -2432,6 +2432,7 @@ dependencies = [
  "nostalre-profiling",
  "nostalre-resources",
  "serde",
+ "serde_json",
  "tracing",
 ]
 
