@@ -2,13 +2,22 @@ pub use nostalre_effects::EFST_SKE;
 
 const FADE_RATE_PER_SEC: f32 = 0.3;
 const NIGHT_FLOOR: f32 = 0.5;
+/// The HD night (moonlight) fades in and out over this long.
+const NIGHT_FADE_SECONDS: f32 = 3.0;
+/// Night news this soon after a map load lands at once: the server resends the night a moment after a warp
+/// (back outside from a building with no night), which must not fade in front of the player.
+const LOAD_SNAP_SECONDS: f32 = 1.5;
 
 pub struct DayNightState {
     night: bool,
     diffuse_rg: [f32; 2],
     base_diffuse: [f32; 3],
     ambient: [f32; 3],
+    /// 0 day to 1 night, for the HD night; kept across maps
+    amount: f32,
     dirty: bool,
+    /// Seconds left in which a night change snaps instead of fading (`LOAD_SNAP_SECONDS` after a map load)
+    snap_left: f32,
 }
 
 impl Default for DayNightState {
@@ -18,7 +27,9 @@ impl Default for DayNightState {
             diffuse_rg: [1.0, 1.0],
             base_diffuse: [1.0, 1.0, 1.0],
             ambient: [0.3, 0.3, 0.3],
+            amount: 0.0,
             dirty: false,
+            snap_left: 0.0,
         }
     }
 }
@@ -28,11 +39,20 @@ impl DayNightState {
         self.night = night;
     }
 
+    /// A new map's day light; the night (if any) carries over at once: at night the map starts at its night
+    /// level, not faded down from daylight in front of the player after a warp.
     pub fn on_map_loaded(&mut self, diffuse: [f32; 3], ambient: [f32; 3]) {
         self.base_diffuse = diffuse;
-        self.diffuse_rg = [diffuse[0], diffuse[1]];
+        self.diffuse_rg = [0, 1].map(|c| {
+            if self.night && diffuse[c] > NIGHT_FLOOR {
+                NIGHT_FLOOR
+            } else {
+                diffuse[c]
+            }
+        });
         self.ambient = ambient;
         self.dirty = true;
+        self.snap_left = LOAD_SNAP_SECONDS;
     }
 
     pub fn reset(&mut self) {
@@ -43,6 +63,21 @@ impl DayNightState {
     }
 
     pub fn tick(&mut self, delta: f32) {
+        let target = if self.night { 1.0 } else { 0.0 };
+        if self.snap_left > 0.0 {
+            self.snap_left -= delta;
+            self.snap_to(target);
+            return;
+        }
+        if self.amount != target {
+            let step = delta / NIGHT_FADE_SECONDS;
+            self.amount = if self.amount < target {
+                (self.amount + step).min(target)
+            } else {
+                (self.amount - step).max(target)
+            };
+            self.dirty = true;
+        }
         let rate = FADE_RATE_PER_SEC * delta;
         for c in 0..2 {
             let before = self.diffuse_rg[c];
@@ -59,8 +94,34 @@ impl DayNightState {
         }
     }
 
+    /// Straight to `target` (0 day, 1 night), the original dimming with it.
+    fn snap_to(&mut self, target: f32) {
+        let diffuse = [0, 1].map(|c| {
+            if self.night && self.base_diffuse[c] > NIGHT_FLOOR {
+                NIGHT_FLOOR
+            } else {
+                self.base_diffuse[c]
+            }
+        });
+        if self.amount != target || self.diffuse_rg != diffuse {
+            self.amount = target;
+            self.diffuse_rg = diffuse;
+            self.dirty = true;
+        }
+    }
+
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
+    }
+
+    /// The server says it is night (status 160).
+    pub fn is_night(&self) -> bool {
+        self.night
+    }
+
+    /// How far into the night (0 day, 1 night), fading over 3 s.
+    pub fn night_amount(&self) -> f32 {
+        self.amount
     }
 
     pub fn world_diffuse(&self) -> [f32; 3] {
@@ -103,7 +164,8 @@ mod tests {
         assert!(s.sprite_light()[0] < 1.0);
 
         s.on_map_loaded([1.0, 1.0, 0.9], [0.3, 0.3, 0.3]);
-        assert_eq!(s.world_diffuse()[0], 1.0);
+        // a warp at night lands at the night level, no fade from daylight
+        assert_eq!(s.world_diffuse()[0], NIGHT_FLOOR);
         for _ in 0..200 {
             s.tick(0.1);
         }

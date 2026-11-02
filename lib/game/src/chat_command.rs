@@ -25,7 +25,14 @@ pub enum ChatCommand {
     },
     ToggleEffect,
     ToggleFog,
+    ToggleHd,
+    /// `/sky MM:SS`: show that minute of the hour's day cycle (seconds into the hour); `/sky off`: the clock again
+    Sky(Option<u32>),
+    SkyUsage,
     ToggleHdWater,
+    /// HD water shows one shader term (0 off; 1 depth, 2 normal, 3 fresnel, 4 refracted, 5 glitter)
+    WaterDebug(u8),
+    WaterDebugUsage,
     ToggleLightmap,
     ToggleAura,
     ToggleNoTrade,
@@ -159,6 +166,8 @@ pub const COMMAND_HELP: &[(&str, &str)] = &[
     ("/fog", "Turns fog on and off."),
     ("/lightmap", "Turns ground lightmaps on and off."),
     ("/hdwater", "Switches between HD and classic water."),
+    ("/waterdebug <0-5|off>", "Shows one HD water term: 1 depth, 2 normal, 3 fresnel, 4 refracted, 5 glitter."),
+    ("/sky <MM:SS|off>", "Previews that minute of the hour's HD day cycle (off: the clock)."),
     ("/aura", "Minimizes level 99 aura effects."),
     ("/bgm", "Turns background music on and off."),
     ("/sound", "Turns sound effects on and off."),
@@ -222,6 +231,31 @@ const STAT_ID_INT: u16 = 16;
 const STAT_ID_DEX: u16 = 17;
 const STAT_ID_LUK: u16 = 18;
 
+/// `MM:SS` within the hour (minutes 0-59) or `off`.
+fn parse_sky(args: &str) -> ChatCommand {
+    if args.eq_ignore_ascii_case("off") {
+        return ChatCommand::Sky(None);
+    }
+    let Some((m, s)) = args.split_once(':') else {
+        return ChatCommand::SkyUsage;
+    };
+    match (m.parse::<u32>(), s.parse::<u32>()) {
+        (Ok(m), Ok(s)) if m < 60 && s < 60 => ChatCommand::Sky(Some(m * 60 + s)),
+        _ => ChatCommand::SkyUsage,
+    }
+}
+
+/// `0`-`5` or `off`.
+fn parse_water_debug(args: &str) -> ChatCommand {
+    if args.eq_ignore_ascii_case("off") {
+        return ChatCommand::WaterDebug(0);
+    }
+    match args.parse::<u8>() {
+        Ok(n) if n <= 5 => ChatCommand::WaterDebug(n),
+        _ => ChatCommand::WaterDebugUsage,
+    }
+}
+
 fn parse_volume(args: &str) -> Option<u8> {
     args.parse::<u8>().ok().map(|v| v.min(127))
 }
@@ -274,7 +308,10 @@ pub fn parse_chat_command(input: &str) -> ChatCommand {
         "/breakguild" => ChatCommand::BreakGuild(args.to_string()),
         "/fog" => ChatCommand::ToggleFog,
         "/lightmap" => ChatCommand::ToggleLightmap,
+        "/hd" => ChatCommand::ToggleHd,
+        "/sky" => parse_sky(args),
         "/hdwater" => ChatCommand::ToggleHdWater,
+        "/waterdebug" => parse_water_debug(args),
         "/aura" => ChatCommand::ToggleAura,
         "/notrade" | "/nt" => ChatCommand::ToggleNoTrade,
         "/noshift" | "/ns" => ChatCommand::ToggleNoShift,

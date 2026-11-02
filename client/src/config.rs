@@ -65,6 +65,9 @@ pub struct CustomConfig {
     pub sound: CustomSoundConfig,
     pub window: CustomWindowConfig,
     pub skill: CustomSkillConfig,
+    /// HD graphics (bloom, grade, grass, shadows...). Off by default; `enabled` applies on the next start.
+    #[serde(deserialize_with = "nostalre_game::hd::deserialize_lenient")]
+    pub hd: nostalre_game::hd::HdConfig,
 }
 
 impl Default for CustomConfig {
@@ -79,6 +82,7 @@ impl Default for CustomConfig {
             sound: CustomSoundConfig::default(),
             window: CustomWindowConfig::default(),
             skill: CustomSkillConfig::default(),
+            hd: Default::default(),
         }
     }
 }
@@ -565,6 +569,20 @@ fn default_shortcut_commands() -> Vec<String> {
 
 impl Config {
     /// The graphics options as the option windows, the menu's Settings and the chat commands change them
+    /// The HD scene light rows as the renderer takes them.
+    pub fn hd_scene(hd: &nostalre_game::hd::HdConfig) -> nostalre_renderer::scene_light::SceneOptions {
+        nostalre_renderer::scene_light::SceneOptions {
+            on: hd.scene_light,
+            night_look: hd.night_look,
+            night_darkness: hd.night_darkness,
+            player_light: hd.player_light,
+            lamp_light: hd.lamp_light,
+            clouds: hd.cloud_strength(),
+            light_cap: hd.terrain_light_cap(),
+            day_cycle: hd.day_cycle,
+        }
+    }
+
     pub fn graphics(&self) -> nostalre_game::display::GraphicsSettings {
         nostalre_game::display::GraphicsSettings {
             ui_scale: self.dpi_scale,
@@ -580,6 +598,7 @@ impl Config {
             filter_effects: self.custom.filtering.effects,
             filter_sprites: self.custom.filtering.sprites,
             sprite_upscale: self.custom.filtering.sprite_upscale,
+            hd: self.custom.hd.clone(),
         }
     }
 
@@ -754,6 +773,30 @@ mod tests {
                 .weapon_aura_for("Aurablade")
                 .is_none()
         );
+    }
+
+    /// Settings shows `custom.hd` as it is saved, and what it applies saves back the same
+    #[test]
+    fn hd_settings_apply() {
+        let mut config = Config::default();
+        config.custom.hd.enabled = true;
+        config.custom.hd.bloom = 0.35;
+        let shown = config.graphics().hd;
+        assert_eq!(shown, config.custom.hd);
+        let json = serde_json::to_string(&config).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.graphics().hd, shown);
+    }
+
+    /// A bad `custom.hd` costs only the HD settings, not the user's whole config
+    #[test]
+    fn a_bad_hd_block_keeps_the_rest_of_the_config() {
+        let config: Config = serde_json::from_str(
+            r#"{"custom": {"fog_scale": 2.0, "hd": {"enabled": "yes"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(config.custom.fog_scale, 2.0);
+        assert!(!config.custom.hd.enabled);
     }
 
     #[test]

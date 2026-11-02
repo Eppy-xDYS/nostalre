@@ -330,6 +330,41 @@ impl App {
                         .add_system(format!("Lightmap: {status}"));
                 }
             }
+            ChatCommand::ToggleHd => {
+                // a quick before/after for this session; Settings keeps the choice
+                let toggled = self.renderer.as_mut().and_then(|renderer| {
+                    let on = nostalre_game::hd::session_toggle(
+                        renderer.hd_running(),
+                        renderer.hd_effects(),
+                    )?;
+                    renderer.set_hd_effects(on);
+                    Some(on)
+                });
+                let message = match toggled {
+                    Some(on) => format!(
+                        "HD effects: {} (this session)",
+                        if on { "ON" } else { "OFF" }
+                    ),
+                    None => "HD is off: turn it on in Settings, Graphics".to_string(),
+                };
+                self.windows.chat_window.add_system(message);
+            }
+            ChatCommand::Sky(at) => {
+                if let Some(renderer) = &mut self.renderer {
+                    let cycle = nostalre_renderer::day_cycle::CYCLE_MS as f32 / 1000.0;
+                    renderer.set_sky_preview(at.map(|secs| secs as f32 / cycle));
+                }
+                let message = match at {
+                    Some(secs) => format!("Sky: minute {}:{:02} of the hour (this session)", secs / 60, secs % 60),
+                    None => "Sky: following the clock".to_string(),
+                };
+                self.windows.chat_window.add_system(message);
+            }
+            ChatCommand::SkyUsage => {
+                self.windows
+                    .chat_window
+                    .add_system("Usage: /sky MM:SS (minute of the hour, 00:00-59:59) or /sky off".to_string());
+            }
             ChatCommand::ToggleHdWater => {
                 if let Some(renderer) = &mut self.renderer {
                     let enabled = renderer.toggle_hd_water();
@@ -338,6 +373,22 @@ impl App {
                         .chat_window
                         .add_system(format!("Water: {status}"));
                 }
+            }
+            ChatCommand::WaterDebug(term) => {
+                if let Some(renderer) = &mut self.renderer {
+                    let message = if renderer.set_water_debug(term) {
+                        format!("Water debug: {term}")
+                    } else {
+                        "Water debug: this map has no water".to_string()
+                    };
+                    self.windows.chat_window.add_system(message);
+                }
+            }
+            ChatCommand::WaterDebugUsage => {
+                self.windows.chat_window.add_system(
+                    "Usage: /waterdebug 0-5 (1 depth, 2 normal, 3 fresnel, 4 refracted, 5 glitter) or off"
+                        .to_string(),
+                );
             }
             ChatCommand::ToggleAura => {
                 let mut display = self.config.display.clone();

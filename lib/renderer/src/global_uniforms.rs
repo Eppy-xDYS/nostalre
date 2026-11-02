@@ -8,7 +8,16 @@ pub struct LightUniform {
     pub diffuse_color: [f32; 4],
     pub ambient_color: [f32; 4],
     pub shadow_strength: f32,
-    pub _pad: [f32; 3],
+    /// HD world glow (lamp, pools, sun); 0 without bloom. See `post::glow`.
+    pub glow: [f32; 3],
+    /// HD scene light: on (0/1), night (0 to 1), cloud strength, terrain lamp cap. All 0: today's look.
+    /// See `scene_light`.
+    pub scene: [f32; 4],
+    /// Cloud drift offset (xy), the rest unused
+    pub cloud: [f32; 4],
+    /// The map's day sun + sky (each at most 1), for the night lift
+    pub day_light: [f32; 4],
+    pub _reserved: [f32; 4],
 }
 
 impl Default for LightUniform {
@@ -18,13 +27,17 @@ impl Default for LightUniform {
             diffuse_color: [1.0, 1.0, 1.0, 1.0],
             ambient_color: [0.3, 0.3, 0.3, 1.0],
             shadow_strength: 1.0,
-            _pad: [0.0; 3],
+            glow: [0.0; 3],
+            scene: [0.0; 4],
+            cloud: [0.0; 4],
+            day_light: [0.0; 4],
+            _reserved: [0.0; 4],
         }
     }
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PointLightGpu {
     pub position: [f32; 4],
     pub color_range: [f32; 4],
@@ -43,13 +56,21 @@ pub struct PointLightsUniform {
     pub lights: [PointLightGpu; MAX_POINT_LIGHTS],
 }
 
-/// The (at most MAX_POINT_LIGHTS) lights whose reach comes nearest `center`, nearest first.
-pub fn nearest_point_lights(all: &[PointLightGpu], center: glam::Vec3) -> PointLightsUniform {
+/// The (at most MAX_POINT_LIGHTS) lights whose reach comes nearest `center`, nearest first; the player's
+/// torch, when there is one, ahead of them all.
+pub fn nearest_point_lights(
+    all: &[PointLightGpu],
+    center: glam::Vec3,
+    torch: Option<PointLightGpu>,
+) -> PointLightsUniform {
     let gap = |l: &PointLightGpu| {
         glam::Vec3::from_slice(&l.position[..3]).distance(center) - l.color_range[3]
     };
     let mut lit: Vec<&PointLightGpu> = all.iter().filter(|l| l.color_range[3] > 0.0).collect();
     lit.sort_by(|a, b| gap(a).total_cmp(&gap(b)));
+    if let Some(torch) = &torch {
+        lit.insert(0, torch);
+    }
     let mut uniform = PointLightsUniform::zeroed();
     for (slot, light) in uniform.lights.iter_mut().zip(&lit) {
         *slot = **light;
@@ -89,6 +110,9 @@ pub struct WaterGlobalsUniform {
     pub time: f32,
     pub strength: f32,
     pub cell_size: f32,
+    /// The water's wave speed, so the bed's light moves with the waves the water draws
+    pub wave_speed: f32,
+    pub _pad: [f32; 3],
 }
 
 /// Maps a world XZ straight to a UV of the ground lightmap, so a model samples
@@ -127,6 +151,12 @@ pub struct GlobalUniforms {
     cell_light_sampler: wgpu::Sampler,
     cell_light: CellLightUniform,
     cell_light_available: bool,
+    /// HD sun shadows (`shadow`): the map (a 1×1 stand-in while off), its compare sampler and the receivers' uniform
+    shadow_view: wgpu::TextureView,
+    shadow_sampler: wgpu::Sampler,
+    shadow_buffer: wgpu::Buffer,
+    /// The caster pass's group 0 (the map can't be bound while it is drawn into)
+    pub shadow_pass_layout: wgpu::BindGroupLayout,
 }
 
 impl GlobalUniforms {
@@ -185,9 +215,53 @@ impl GlobalUniforms {
             ..Default::default()
         });
 
+        let shadow_view = crate::shadow::depth_texture(device, 1).create_view(&Default::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let shadow_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("shadow_uniform"),
+            contents: bytemuck::bytes_of(&crate::shadow::ShadowUniform::OFF),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let shadow_pass_layout = crate::shadow::pass_layout(device);
+
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("global_uniforms"),
             entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
@@ -278,6 +352,7 @@ impl GlobalUniforms {
             &cell_light_sampler,
             &cell_light_buffer,
             &water_buffer,
+            (&shadow_view, &shadow_sampler, &shadow_buffer),
         );
 
         Self {
@@ -293,6 +368,10 @@ impl GlobalUniforms {
             cell_light_sampler,
             cell_light,
             cell_light_available: false,
+            shadow_view,
+            shadow_sampler,
+            shadow_buffer,
+            shadow_pass_layout,
         }
     }
 
@@ -308,7 +387,21 @@ impl GlobalUniforms {
             &self.cell_light_sampler,
             &self.cell_light_buffer,
             &self.water_buffer,
+            (&self.shadow_view, &self.shadow_sampler, &self.shadow_buffer),
         );
+    }
+
+    /// The shadow map the receivers sample; `None`: the 1×1 stand-in (shadows off).
+    pub fn set_shadow_map(&mut self, device: &wgpu::Device, view: Option<&wgpu::TextureView>) {
+        self.shadow_view = match view {
+            Some(view) => view.clone(),
+            None => crate::shadow::depth_texture(device, 1).create_view(&Default::default()),
+        };
+        self.rebuild_bind_group(device);
+    }
+
+    pub fn update_shadow(&self, queue: &wgpu::Queue, shadow: &crate::shadow::ShadowUniform) {
+        queue.write_buffer(&self.shadow_buffer, 0, bytemuck::bytes_of(shadow));
     }
 
     /// Uploads a map's per-cell light texture, or clears it when the map has no
@@ -387,6 +480,12 @@ impl GlobalUniforms {
         queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[*light]));
     }
 
+    /// The clouds' drift alone, each frame (the rest of the light changes rarely).
+    pub fn update_cloud(&self, queue: &wgpu::Queue, offset: [f32; 2]) {
+        let at = std::mem::offset_of!(LightUniform, cloud) as wgpu::BufferAddress;
+        queue.write_buffer(&self.light_buffer, at, bytemuck::cast_slice(&offset));
+    }
+
     pub fn update_fog(&self, queue: &wgpu::Queue, fog: &FogUniform) {
         queue.write_buffer(&self.fog_buffer, 0, bytemuck::cast_slice(&[*fog]));
     }
@@ -412,6 +511,7 @@ fn build_bind_group(
     cell_light_sampler: &wgpu::Sampler,
     cell_light_buffer: &wgpu::Buffer,
     water_buffer: &wgpu::Buffer,
+    (shadow_view, shadow_sampler, shadow_buffer): (&wgpu::TextureView, &wgpu::Sampler, &wgpu::Buffer),
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("global_uniforms"),
@@ -448,6 +548,18 @@ fn build_bind_group(
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: water_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::TextureView(shadow_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: wgpu::BindingResource::Sampler(shadow_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 10,
+                resource: shadow_buffer.as_entire_binding(),
             },
         ],
     })
@@ -489,7 +601,7 @@ mod point_light_tests {
             light(50.0, 0.0),
             light(30.0, 10.0),
         ];
-        let picked = nearest_point_lights(&all, glam::Vec3::ZERO);
+        let picked = nearest_point_lights(&all, glam::Vec3::ZERO, None);
         assert_eq!(picked.count, 3); // the unlit one (range 0) is left out
         assert_eq!(picked.lights[0].position[0], 100.0); // reach 10 from the centre
         assert_eq!(picked.lights[1].position[0], 30.0);
@@ -499,7 +611,7 @@ mod point_light_tests {
     #[test]
     fn at_most_max_point_lights() {
         let all: Vec<_> = (0..100).map(|i| light(i as f32, 1.0)).collect();
-        let picked = nearest_point_lights(&all, glam::Vec3::ZERO);
+        let picked = nearest_point_lights(&all, glam::Vec3::ZERO, None);
         assert_eq!(picked.count as usize, MAX_POINT_LIGHTS);
         assert_eq!(
             picked.lights[MAX_POINT_LIGHTS - 1].position[0],

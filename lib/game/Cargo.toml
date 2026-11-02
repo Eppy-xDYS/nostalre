@@ -16,3 +16,6 @@ tracing = { workspace = true }
 serde = { workspace = true }
 mlua = { workspace = true }
 encoding_rs = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

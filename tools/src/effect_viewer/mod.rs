@@ -1663,7 +1663,7 @@ impl ApplicationHandler for App {
             .with_inner_size(winit::dpi::PhysicalSize::new(1024u32, 768u32))
             .with_visible(!batch_mode);
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
-        let renderer = block_on(Renderer::new(window.clone(), 14.0, 1.0));
+        let renderer = block_on(Renderer::new(window.clone(), 14.0, 1.0, Default::default()));
 
         // App-owned 1x1 white bind group for the billboard primitive
         // fallback. See `App::white_bind_group` doc for why this is on App

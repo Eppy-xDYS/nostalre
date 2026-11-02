@@ -1,6 +1,6 @@
 use nostalre_formats::gnd::GndFile;
 use nostalre_formats::grf::GrfArchive;
-use nostalre_formats::rsw::WaterSettings;
+use nostalre_formats::map_water::MapWater;
 
 use crate::device::DEPTH_FORMAT;
 use crate::global_uniforms::{GlobalUniforms, WaterGlobalsUniform};
@@ -52,7 +52,7 @@ struct WaterUniforms {
     level: f32,
     cell_size: f32,
     debug: f32,
-    _padding: f32,
+    detail: f32,
 }
 
 const WATER_FRAMES: usize = 32;
@@ -77,21 +77,24 @@ pub struct WaterMaterial {
     pub absorb: [f32; 4],
     /// Lava: glows, no refraction.
     pub emissive: bool,
+    /// How far the body colour takes on the map's own animated RO water texture (0 none): keeps each
+    /// map's look; kept low, as the texture's tiles turn blocky when they show plainly.
+    pub detail: f32,
 }
 
 /// Per water type, from the colour of its texture set (`data/texture/워터/water<type>NN.jpg`): 0 clear
 /// blue, 1 deep ocean, 2 bright shallows, 3 dark dungeon water, 4 lava, 5 swamp, 6 lava crust, 7 magenta.
 /// Types past those take the texture set they fall back to.
 pub fn water_material(water_type: i32) -> WaterMaterial {
-    // gamma colours: shallow tint, deep, absorption (r, g, b per cell), murkiness
-    let (tint, deep, absorb, murk, emissive) = match water_type.rem_euclid(8) {
-        0 => ([0.10, 0.44, 0.59], [0.02, 0.10, 0.20], [1.6, 0.55, 0.35], 0.55, false),
-        1 => ([0.04, 0.32, 0.40], [0.01, 0.07, 0.12], [1.8, 0.70, 0.55], 0.75, false),
-        2 => ([0.20, 0.59, 0.62], [0.03, 0.18, 0.24], [1.3, 0.40, 0.35], 0.45, false),
-        3 => ([0.18, 0.25, 0.37], [0.02, 0.04, 0.08], [1.4, 1.00, 0.70], 0.70, false),
-        5 => ([0.31, 0.28, 0.15], [0.08, 0.07, 0.03], [0.9, 1.00, 1.60], 0.90, false),
-        7 => ([0.76, 0.06, 0.70], [0.20, 0.01, 0.20], [0.6, 2.00, 0.70], 0.65, false),
-        4 | 6 => ([0.81, 0.16, 0.12], [0.30, 0.04, 0.02], [0.0; 3], 1.0, true),
+    // gamma colours: shallow tint, deep, absorption (r, g, b per cell), murkiness, texture detail
+    let (tint, deep, absorb, murk, detail) = match water_type.rem_euclid(8) {
+        0 => ([0.10, 0.44, 0.59], [0.02, 0.10, 0.20], [1.6, 0.55, 0.35], 0.55, 0.2),
+        1 => ([0.04, 0.32, 0.40], [0.01, 0.07, 0.12], [1.8, 0.70, 0.55], 0.75, 0.2),
+        2 => ([0.20, 0.59, 0.62], [0.03, 0.18, 0.24], [1.3, 0.40, 0.35], 0.45, 0.25),
+        3 => ([0.18, 0.25, 0.37], [0.02, 0.04, 0.08], [1.4, 1.00, 0.70], 0.70, 0.15),
+        5 => ([0.31, 0.28, 0.15], [0.08, 0.07, 0.03], [0.9, 1.00, 1.60], 0.90, 0.3),
+        7 => ([0.76, 0.06, 0.70], [0.20, 0.01, 0.20], [0.6, 2.00, 0.70], 0.65, 0.2),
+        4 | 6 => ([0.81, 0.16, 0.12], [0.30, 0.04, 0.02], [0.0; 3], 1.0, 0.0),
         _ => unreachable!(),
     };
     let lin = |c: [f32; 3], a: f32| [srgb_to_linear(c[0]), srgb_to_linear(c[1]), srgb_to_linear(c[2]), a];
@@ -99,7 +102,8 @@ pub fn water_material(water_type: i32) -> WaterMaterial {
         tint: lin(tint, murk),
         deep: lin(deep, 1.0),
         absorb: [absorb[0], absorb[1], absorb[2], 0.0],
-        emissive,
+        emissive: matches!(water_type.rem_euclid(8), 4 | 6),
+        detail,
     }
 }
 
@@ -117,12 +121,8 @@ struct SceneCopy {
     view: wgpu::TextureView,
 }
 
-pub struct WaterRenderer {
-    pipeline: wgpu::RenderPipeline,
-    hd_pipeline: wgpu::RenderPipeline,
-    scene_layout: wgpu::BindGroupLayout,
-    scene_sampler: wgpu::Sampler,
-    scene_copy: Option<SceneCopy>,
+/// The water of one type: its own mesh (each zone at its level), textures, waves and colours.
+struct WaterLayer {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
@@ -136,8 +136,20 @@ pub struct WaterRenderer {
     opacity: f32,
     ambient_tint: f32,
     level: f32,
-    cell_size: f32,
     material: WaterMaterial,
+}
+
+pub struct WaterRenderer {
+    pipeline: wgpu::RenderPipeline,
+    hd_pipeline: wgpu::RenderPipeline,
+    scene_layout: wgpu::BindGroupLayout,
+    scene_sampler: wgpu::Sampler,
+    scene_copy: Option<SceneCopy>,
+    /// One per water type, the type with the most water first.
+    layers: Vec<WaterLayer>,
+    /// `caustics_level`: none on maps whose zones lie at different levels
+    caustics_level: Option<f32>,
+    cell_size: f32,
     /// `NOSTALRE_WATER_DEBUG`: one term of the HD shader on screen (see water_hd.wgsl).
     debug: f32,
 }
@@ -187,58 +199,67 @@ pub struct HdWaterTarget<'a> {
     pub depth_view: &'a wgpu::TextureView,
 }
 
-impl WaterRenderer {
+fn uniform_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("water_uniforms"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
+}
+
+/// The 32 animation frames of a water type, each its own or, missing from the archive, the set's it falls back to.
+fn load_water_textures(
+    water_type: i32,
+    grf: &GrfArchive,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture_cache: &mut TextureCache,
+) -> Vec<String> {
+    let fallback_type = water_type % WATER_TEXTURE_SETS;
+    (0..WATER_FRAMES)
+        .map(|i| {
+            let name = water_texture_name(water_type, i);
+            if texture_cache
+                .get_or_load(&name, grf, device, queue, false)
+                .is_some()
+                || fallback_type == water_type
+            {
+                return name;
+            }
+            let fallback = water_texture_name(fallback_type, i);
+            texture_cache.get_or_load(&fallback, grf, device, queue, false);
+            fallback
+        })
+        .collect()
+}
+
+impl WaterLayer {
     #[allow(clippy::too_many_arguments)]
-    pub fn from_water_settings(
-        water: &WaterSettings,
+    fn new(
+        water: &MapWater,
+        water_type: i32,
         gnd: &GndFile,
         grf: &GrfArchive,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        global_uniforms: &GlobalUniforms,
+        uniform_layout: &wgpu::BindGroupLayout,
         texture_cache: &mut TextureCache,
-        surface_format: wgpu::TextureFormat,
     ) -> Option<Self> {
-        let water_y = water.level?;
-        let water_type = water.water_type.unwrap_or(0);
-        if water_type < 0 {
-            return None;
-        }
-        let zoom = gnd.zoom;
-
-        let wave_height = water.wave_height.unwrap_or(1.0);
-        let wave_speed = water.wave_speed.unwrap_or(2.0) % 360.0;
-        let wave_pitch_per_unit = water.wave_pitch.unwrap_or(50.0) / zoom;
-        let anim_speed = water.anim_speed.unwrap_or(3) as f32;
-        let is_ambient_tinted = water_type == AMBIENT_TINTED_WATER_TYPE;
-        let opacity = if is_ambient_tinted {
-            1.0
-        } else {
-            WATER_OPACITY
-        };
-        let ambient_tint = if is_ambient_tinted { 1.0 } else { 0.0 };
-
-        let fallback_type = water_type % WATER_TEXTURE_SETS;
-        let texture_names: Vec<String> = (0..WATER_FRAMES)
-            .map(|i| {
-                let name = water_texture_name(water_type, i);
-                if texture_cache
-                    .get_or_load(&name, grf, device, queue, false)
-                    .is_some()
-                    || fallback_type == water_type
-                {
-                    return name;
-                }
-                let fallback = water_texture_name(fallback_type, i);
-                texture_cache.get_or_load(&fallback, grf, device, queue, false);
-                fallback
-            })
-            .collect();
-
-        let (vertices, indices) = build_water_mesh(gnd, water_y, wave_height);
+        let (vertices, indices) = build_zone_mesh(gnd, water, water_type);
         if vertices.is_empty() {
             return None;
         }
+        // waves and the level the terrain's caustics use: the type's first zone
+        let zone = water.zones.iter().find(|z| z.water_type == water_type)?;
+        let is_ambient_tinted = water_type == AMBIENT_TINTED_WATER_TYPE;
 
         let vertex_buffer = create_buffer(
             device,
@@ -248,37 +269,81 @@ impl WaterRenderer {
         );
         let index_buffer =
             create_buffer(device, "water_indices", &indices, wgpu::BufferUsages::INDEX);
-
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("water_uniforms"),
             size: std::mem::size_of::<WaterUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
-        let uniform_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("water_uniforms"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("water_uniforms"),
-            layout: &uniform_bind_group_layout,
+            layout: uniform_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniform_buffer.as_entire_binding(),
             }],
         });
+
+        Some(Self {
+            vertex_buffer,
+            index_buffer,
+            index_count: indices.len() as u32,
+            uniform_buffer,
+            uniform_bind_group,
+            texture_names: load_water_textures(water_type, grf, device, queue, texture_cache),
+            wave_height: zone.wave_height,
+            wave_pitch_per_unit: zone.wave_pitch / gnd.zoom,
+            wave_speed: zone.wave_speed % 360.0,
+            anim_speed: zone.anim_speed as f32,
+            opacity: if is_ambient_tinted {
+                1.0
+            } else {
+                WATER_OPACITY
+            },
+            ambient_tint: if is_ambient_tinted { 1.0 } else { 0.0 },
+            level: zone.level,
+            material: water_material(water_type),
+        })
+    }
+
+    fn texture<'a>(&self, texture_cache: &'a TextureCache, elapsed: f32) -> Option<&'a wgpu::BindGroup> {
+        texture_cache.get(&self.texture_names[texture_frame_at(elapsed, self.anim_speed)])
+    }
+
+    fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, texture: &'a wgpu::BindGroup) {
+        pass.set_bind_group(1, texture, &[]);
+        pass.set_bind_group(2, &self.uniform_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..self.index_count, 0, 0..1);
+    }
+}
+
+impl WaterRenderer {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_map_water(
+        water: &MapWater,
+        gnd: &GndFile,
+        grf: &GrfArchive,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        global_uniforms: &GlobalUniforms,
+        texture_cache: &mut TextureCache,
+        surface_format: wgpu::TextureFormat,
+    ) -> Option<Self> {
+        let uniform_layout = uniform_bind_group_layout(device);
+        let mut layers: Vec<WaterLayer> = water
+            .types()
+            .into_iter()
+            .filter(|t| *t >= 0)
+            .filter_map(|t| {
+                WaterLayer::new(water, t, gnd, grf, device, queue, &uniform_layout, texture_cache)
+            })
+            .collect();
+        if layers.is_empty() {
+            return None;
+        }
+        layers.sort_by_key(|l| std::cmp::Reverse(l.index_count));
 
         let scene_layout = scene_bind_group_layout(device);
         let scene_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -291,7 +356,7 @@ impl WaterRenderer {
         let layouts = [
             &global_uniforms.bind_group_layout,
             &texture_cache.bind_group_layout,
-            &uniform_bind_group_layout,
+            &uniform_layout,
         ];
         let pipeline = create_pipeline(
             device,
@@ -304,7 +369,7 @@ impl WaterRenderer {
             device,
             surface_format,
             "water_hd",
-            include_str!("shaders/water_hd.wgsl"),
+            crate::WATER_HD_WGSL,
             &[layouts[0], layouts[1], layouts[2], &scene_layout],
         );
 
@@ -314,21 +379,9 @@ impl WaterRenderer {
             scene_layout,
             scene_sampler,
             scene_copy: None,
-            vertex_buffer,
-            index_buffer,
-            index_count: indices.len() as u32,
-            uniform_buffer,
-            uniform_bind_group,
-            texture_names,
-            wave_height,
-            wave_pitch_per_unit,
-            wave_speed,
-            anim_speed,
-            opacity,
-            ambient_tint,
-            level: water_y,
-            cell_size: zoom,
-            material: water_material(water_type),
+            layers,
+            caustics_level: caustics_level(water),
+            cell_size: gnd.zoom,
             debug: std::env::var("NOSTALRE_WATER_DEBUG")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -336,41 +389,48 @@ impl WaterRenderer {
         })
     }
 
-    /// `screen` = (width, height, near, far) of the frame it draws into.
-    pub fn update(&self, queue: &wgpu::Queue, elapsed: f32, screen: [f32; 4]) {
-        let m = &self.material;
-        let uniforms = WaterUniforms {
-            wave_height: self.wave_height,
-            wave_pitch_per_unit: self.wave_pitch_per_unit,
-            wave_offset: wave_offset_at(elapsed, self.wave_speed),
-            opacity: self.opacity,
-            ambient_tint: self.ambient_tint,
-            time: elapsed,
-            wave_speed: self.wave_speed,
-            emissive: if m.emissive { 1.0 } else { 0.0 },
-            tint: m.tint,
-            deep: m.deep,
-            absorb: m.absorb,
-            screen,
-            level: self.level,
-            cell_size: self.cell_size,
-            debug: self.debug,
-            _padding: 0.0,
-        };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+    pub fn set_debug(&mut self, term: u8) {
+        self.debug = f32::from(term);
     }
 
-    /// The caustics the terrain draws under this water when it is drawn HD.
+    /// `screen` = (width, height, near, far) of the frame it draws into.
+    pub fn update(&self, queue: &wgpu::Queue, elapsed: f32, screen: [f32; 4]) {
+        for layer in &self.layers {
+            let m = &layer.material;
+            let uniforms = WaterUniforms {
+                wave_height: layer.wave_height,
+                wave_pitch_per_unit: layer.wave_pitch_per_unit,
+                wave_offset: wave_offset_at(elapsed, layer.wave_speed),
+                opacity: layer.opacity,
+                ambient_tint: layer.ambient_tint,
+                time: elapsed,
+                wave_speed: layer.wave_speed,
+                emissive: if m.emissive { 1.0 } else { 0.0 },
+                tint: m.tint,
+                deep: m.deep,
+                absorb: m.absorb,
+                screen,
+                level: layer.level,
+                cell_size: self.cell_size,
+                debug: self.debug,
+                detail: m.detail,
+            };
+            queue.write_buffer(&layer.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        }
+    }
+
+    /// The caustics the terrain draws under this water when it is drawn HD; none under lava or on maps
+    /// whose water zones lie at different levels.
     pub fn caustics(&self, elapsed: f32) -> WaterGlobalsUniform {
+        let main = &self.layers[0];
+        let level = self.caustics_level.filter(|_| !main.material.emissive);
         WaterGlobalsUniform {
-            level: self.level,
+            level: level.unwrap_or(main.level),
             time: elapsed,
-            strength: if self.material.emissive {
-                0.0
-            } else {
-                CAUSTIC_STRENGTH
-            },
+            strength: if level.is_some() { CAUSTIC_STRENGTH } else { 0.0 },
             cell_size: self.cell_size,
+            wave_speed: main.wave_speed,
+            ..Default::default()
         }
     }
 
@@ -381,19 +441,13 @@ impl WaterRenderer {
         texture_cache: &'a TextureCache,
         elapsed: f32,
     ) {
-        let tex_name = &self.texture_names[texture_frame_at(elapsed, self.anim_speed)];
-        let tex_bg = match texture_cache.get(tex_name) {
-            Some(bg) => bg,
-            None => return,
-        };
-
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &global_uniforms.bind_group, &[]);
-        pass.set_bind_group(1, tex_bg, &[]);
-        pass.set_bind_group(2, &self.uniform_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..self.index_count, 0, 0..1);
+        for layer in &self.layers {
+            if let Some(texture) = layer.texture(texture_cache, elapsed) {
+                layer.draw(pass, texture);
+            }
+        }
     }
 
     /// HD water: copies the finished opaque scene, then draws over it in its own pass with the depth
@@ -407,10 +461,6 @@ impl WaterRenderer {
         texture_cache: &TextureCache,
         elapsed: f32,
     ) {
-        let tex_name = &self.texture_names[texture_frame_at(elapsed, self.anim_speed)];
-        let Some(tex_bg) = texture_cache.get(tex_name) else {
-            return;
-        };
         let source = target.scene_texture;
         let size = source.size();
         let stale = self.scene_copy.as_ref().is_none_or(|copy| {
@@ -466,12 +516,16 @@ impl WaterRenderer {
         });
         pass.set_pipeline(&self.hd_pipeline);
         pass.set_bind_group(0, &global_uniforms.bind_group, &[]);
-        pass.set_bind_group(1, tex_bg, &[]);
-        pass.set_bind_group(2, &self.uniform_bind_group, &[]);
         pass.set_bind_group(3, &scene_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..self.index_count, 0, 0..1);
+        for layer in &self.layers {
+            // HD water holds one frame of its texture: the classic animation swaps a new picture of bright
+            // squiggles 40 times a second, which flashed through the detail; the swell moves it instead.
+            // Lava keeps its animation.
+            let frame_time = if layer.material.emissive { elapsed } else { 0.0 };
+            if let Some(texture) = layer.texture(texture_cache, frame_time) {
+                layer.draw(&mut pass, texture);
+            }
+        }
     }
 }
 
@@ -540,14 +594,30 @@ pub fn build_water_mesh(
     water_y: f32,
     wave_height: f32,
 ) -> (Vec<WaterVertex>, Vec<u32>) {
+    build_mesh(gnd, |_, _| Some((water_y, wave_height)))
+}
+
+/// The level the terrain's caustics take: the water's, when every zone with water sits at the same
+/// level. None when zones differ: one level would light dry ground and leave real water dark.
+pub fn caustics_level(water: &MapWater) -> Option<f32> {
+    let mut levels = water.zones.iter().filter(|z| z.water_type >= 0).map(|z| z.level);
+    let first = levels.next()?;
+    levels.all(|l| l == first).then_some(first)
+}
+
+/// The mesh of one water type on a map whose water may be split into zones: each cell at its zone's level.
+pub fn build_zone_mesh(gnd: &GndFile, water: &MapWater, water_type: i32) -> (Vec<WaterVertex>, Vec<u32>) {
+    build_mesh(gnd, |x, y| {
+        let zone = water.zone_at(gnd, x, y);
+        (zone.water_type == water_type).then_some((zone.level, zone.wave_height))
+    })
+}
+
+/// `water_at(x, y)`: the cell's water level and wave height, none where this mesh has no water.
+fn build_mesh(gnd: &GndFile, water_at: impl Fn(i32, i32) -> Option<(f32, f32)>) -> (Vec<WaterVertex>, Vec<u32>) {
     let zoom = gnd.zoom;
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-
-    // In native RO coords more negative = higher, so a corner "below" the water
-    // surface has a larger height value. A cell gets a water quad when any of
-    // its corners dips below the wave troughs (water_y - wave_height).
-    let submerged = water_y - wave_height;
 
     for y in 0..gnd.height {
         for x in 0..gnd.width {
@@ -557,6 +627,14 @@ pub fn build_water_mesh(
             if cell.surface_up < 0 {
                 continue;
             }
+            let Some((water_y, wave_height)) = water_at(x, y) else {
+                continue;
+            };
+
+            // In native RO coords more negative = higher, so a corner "below" the water
+            // surface has a larger height value. A cell gets a water quad when any of
+            // its corners dips below the wave troughs (water_y - wave_height).
+            let submerged = water_y - wave_height;
 
             if cell.height_sw < submerged
                 && cell.height_se < submerged
@@ -692,6 +770,7 @@ mod tests {
     fn make_gnd(width: i32, height: i32, cell_height: f32) -> GndFile {
         let cell_count = (width * height) as usize;
         GndFile {
+            water: None,
             version: (1, 7),
             width,
             height,

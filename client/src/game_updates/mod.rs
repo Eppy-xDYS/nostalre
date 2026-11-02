@@ -159,7 +159,15 @@ impl App {
             renderer.set_day_night(
                 self.game.schedulers.day_night.world_diffuse(),
                 self.game.schedulers.day_night.sprite_light(),
+                self.game.schedulers.day_night.night_amount(),
+                self.game.schedulers.day_night.is_night(),
             );
+        }
+        if let Some(renderer) = &mut self.renderer {
+            let unix_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64);
+            renderer.set_time_of_day(nostalre_renderer::day_cycle::phase(unix_ms));
         }
         let camera = self.renderer.as_ref().map(|r| &r.camera);
         let is_visible = |pos: [f32; 3]| {

@@ -16,7 +16,7 @@ pub struct GroundVertex {
 }
 
 impl GroundVertex {
-    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GroundVertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &wgpu::vertex_attr_array![
@@ -40,6 +40,8 @@ struct DrawBatch {
 
 pub struct GroundRenderer {
     pipeline: wgpu::RenderPipeline,
+    /// Depth from the sun for HD sun shadows (`shadow`)
+    shadow_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     batches: Vec<DrawBatch>,
@@ -109,9 +111,18 @@ impl GroundRenderer {
             &global_uniforms.bind_group_layout,
             &texture_cache.bind_group_layout,
         );
+        let shadow_pipeline = crate::shadow::caster_pipeline(
+            device,
+            &global_uniforms.shadow_pass_layout,
+            &texture_cache.bind_group_layout,
+            None,
+            GroundVertex::LAYOUT,
+            "vs_ground",
+        );
 
         Self {
             pipeline,
+            shadow_pipeline,
             vertex_buffer,
             index_buffer,
             batches,
@@ -124,6 +135,25 @@ impl GroundRenderer {
 
     pub fn set_lightmap_enabled(&mut self, enabled: bool) {
         self.lightmap_enabled = enabled;
+    }
+
+    /// The ground's depth into the sun-shadow map (`shadow::ShadowMap::begin`).
+    pub fn render_shadow<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        pass_bind_group: &'a wgpu::BindGroup,
+        texture_cache: &'a TextureCache,
+    ) {
+        pass.set_pipeline(&self.shadow_pipeline);
+        pass.set_bind_group(0, pass_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        for batch in &self.batches {
+            if let Some(tex_bg) = texture_cache.get_ground(&batch.texture_name) {
+                pass.set_bind_group(1, tex_bg, &[]);
+                pass.draw_indexed(batch.start_index..batch.start_index + batch.index_count, 0, 0..1);
+            }
+        }
     }
 
     pub fn render<'a>(
@@ -726,7 +756,7 @@ fn create_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("terrain"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/terrain.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(crate::TERRAIN_WGSL.into()),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -853,6 +883,7 @@ mod tests {
             color_bgra: [255, 255, 255, 255],
         };
         let gnd = GndFile {
+            water: None,
             version: (1, 7),
             width: 2,
             height: 1,
@@ -917,6 +948,7 @@ mod tests {
             color_bgra,
         };
         let gnd = GndFile {
+            water: None,
             version: (1, 7),
             width: 3,
             height: 3,
@@ -965,6 +997,7 @@ mod tests {
     /// Two cells side by side in x, heights given as [sw, se, nw, ne].
     fn gnd_two_cells(cell_a: [f32; 4], cell_b: [f32; 4]) -> GndFile {
         GndFile {
+            water: None,
             version: (1, 7),
             width: 2,
             height: 1,
@@ -1031,6 +1064,7 @@ mod tests {
     #[test]
     fn east_wall_maps_uv_columns_across_the_wall_not_down_it() {
         let gnd = GndFile {
+            water: None,
             version: (1, 7),
             width: 2,
             height: 1,

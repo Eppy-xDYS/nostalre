@@ -944,6 +944,7 @@ impl ApplicationHandler for App {
             window.clone(),
             font_px_height,
             dpi_scale,
+            Default::default(),
         ));
 
         let grf = match GrfArchive::open(Path::new(&self.grf_path)) {

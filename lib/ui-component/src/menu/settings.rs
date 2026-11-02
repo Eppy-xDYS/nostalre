@@ -7,6 +7,7 @@ use crate::game::shortcut_list_window::{LINE_MAX, SLOT_COUNT};
 use crate::hud::style;
 use nostalre_game::display::{GraphicsSettings, HudLayout, SoundSettings};
 use nostalre_game::event::GameEvent;
+use nostalre_game::hd::HdPreset;
 use nostalre_game::keybinding::{HotkeyAction, KeyBindings, KeyChord};
 use nostalre_ui::frame::{UiFrame, WidgetId};
 use nostalre_ui::rect::Rect;
@@ -17,6 +18,13 @@ const CHOICE_W: f32 = 110.0;
 const SLIDER_W: f32 = 160.0;
 const SECTION_GAP: f32 = 12.0;
 const VOLUME_STEP: u32 = 5;
+/// HD quality in the order left and right step through; a hand-written Custom shows as itself
+const HD_QUALITIES: [HdPreset; 4] = [
+    HdPreset::Low,
+    HdPreset::Medium,
+    HdPreset::High,
+    HdPreset::Ultra,
+];
 const LINE_LABEL_W: f32 = 90.0;
 /// The chat lines' keys, Alt+1 to Alt+9 then Alt+0
 const LINE_LABELS: [&str; SLOT_COUNT] = [
@@ -63,6 +71,24 @@ enum Opt {
     Effects,
     Stereo,
     Background,
+    Hd,
+    HdQuality,
+    Bloom,
+    LampGlow,
+    LightPools,
+    SunGlow,
+    Grass,
+    Flora,
+    SceneLight,
+    CloudShadows,
+    NightLook,
+    NightDarkness,
+    PlayerLight,
+    LampLight,
+    DayCycle,
+    SunShadows,
+    Grade,
+    Vignette,
 }
 
 /// Which event a change sends
@@ -111,6 +137,24 @@ impl Opt {
             Self::Effects => "Effects",
             Self::Stereo => "Stereo",
             Self::Background => "Play in background",
+            Self::Hd => "HD graphics",
+            Self::HdQuality => "HD quality",
+            Self::Bloom => "Bloom",
+            Self::LampGlow => "Lamp glow",
+            Self::LightPools => "Light pools",
+            Self::SunGlow => "Sun glow",
+            Self::Grass => "Grass",
+            Self::Flora => "Flora",
+            Self::SceneLight => "Scene light",
+            Self::CloudShadows => "Cloud shadows",
+            Self::NightLook => "Night look",
+            Self::NightDarkness => "Night darkness",
+            Self::PlayerLight => "Player light",
+            Self::LampLight => "Lamp light",
+            Self::DayCycle => "Day cycle",
+            Self::SunShadows => "Sun shadows",
+            Self::Grade => "Colour grade",
+            Self::Vignette => "Vignette",
         }
     }
 
@@ -143,14 +187,44 @@ impl Opt {
             Self::Effects => "Skills, hits and the interface.",
             Self::Stereo => "Sounds pan with where they happen.",
             Self::Background => "Keep sound on while nostalRE is not in front.",
+            Self::Hd => "Glow, light and colour beyond the original look. On: applies on restart.",
+            Self::HdQuality => "Low skips bloom. Moving to or from Low applies on restart.",
+            Self::Bloom => "Glow around bright skill effects. 0%: off.",
+            Self::LampGlow => "Lamp glass, torches and candles glow. 0%: off.",
+            Self::LightPools => "Soft glow where lamps light the ground. 0%: off.",
+            Self::SunGlow => "Bright sunlit stone glows a little. 0%: off.",
+            Self::Grass => "Swaying grass on fields and meadows. 0%: off.",
+            Self::Flora => "Ferns, mushrooms and flowers in patches among the grass, most on forest floor. 0%: grass only.",
+            Self::SceneLight => "Softer baked light and shadows; street lamps light the ground.",
+            Self::CloudShadows => "Cloud shadows drifting over the land outdoors. 0%: off.",
+            Self::NightLook => "A moonlit night outdoors with lamps lighting the ground. Off: the original's.",
+            Self::NightDarkness => "How dark nights are outdoors (with Night look). 0%: dusk-like, 100%: near black.",
+            Self::PlayerLight => "A warm light around you at night outdoors (with Night look).",
+            Self::LampLight => "How brightly street lamps and lanterns light the ground at night. 0%: off.",
+            Self::DayCycle => "The sun crosses the sky once an hour: dawn, golden dusk, night. Off: always midday.",
+            Self::SunShadows => "Trees and buildings cast shadows that follow the sun. Not on Low. 0%: off.",
+            Self::Grade => "A colour mood per map: warm towns, green fields, cold ruins. 0%: off.",
+            Self::Vignette => "Darken the screen's corners a little.",
         }
     }
 
     /// What Enter does to it; a volume moves with left and right only
     fn verb(self) -> Option<&'static str> {
         match self {
-            Self::Scale | Self::Hud => Some("change"),
-            Self::Music | Self::Effects => None,
+            Self::Scale | Self::Hud | Self::HdQuality => Some("change"),
+            Self::Music
+            | Self::Effects
+            | Self::Bloom
+            | Self::LampGlow
+            | Self::LightPools
+            | Self::SunGlow
+            | Self::Grass
+            | Self::Flora
+            | Self::CloudShadows
+            | Self::LampLight
+            | Self::NightDarkness
+            | Self::SunShadows
+            | Self::Grade => None,
             _ => Some("toggle"),
         }
     }
@@ -193,8 +267,47 @@ impl Opt {
             Self::SnapItem => &mut g.snap.item,
             Self::Stereo => &mut s.stereo,
             Self::Background => &mut s.play_when_unfocused,
-            Self::Scale | Self::Hud | Self::Music | Self::Effects => return None,
+            Self::Hd => &mut g.hd.enabled,
+            Self::Vignette => &mut g.hd.vignette,
+            Self::SceneLight => &mut g.hd.scene_light,
+            Self::NightLook => &mut g.hd.night_look,
+            Self::PlayerLight => &mut g.hd.player_light,
+            Self::DayCycle => &mut g.hd.day_cycle,
+            Self::Scale
+            | Self::Hud
+            | Self::Music
+            | Self::Effects
+            | Self::HdQuality
+            | Self::Bloom
+            | Self::LampGlow
+            | Self::LightPools
+            | Self::SunGlow
+            | Self::Grass
+            | Self::Flora
+            | Self::CloudShadows
+            | Self::LampLight
+            | Self::NightDarkness
+            | Self::SunShadows
+            | Self::Grade => return None,
         })
+    }
+
+    /// An HD effect's strength, 0 to 1 on its slider
+    fn strength(self, v: &mut SettingsValues) -> Option<&mut f32> {
+        match self {
+            Self::Bloom => Some(&mut v.graphics.hd.bloom),
+            Self::LampGlow => Some(&mut v.graphics.hd.lamp_glow),
+            Self::LightPools => Some(&mut v.graphics.hd.light_pools),
+            Self::SunGlow => Some(&mut v.graphics.hd.sun_glow),
+            Self::Grass => Some(&mut v.graphics.hd.grass),
+            Self::Flora => Some(&mut v.graphics.hd.flora),
+            Self::CloudShadows => Some(&mut v.graphics.hd.cloud_shadows),
+            Self::LampLight => Some(&mut v.graphics.hd.lamp_light),
+            Self::NightDarkness => Some(&mut v.graphics.hd.night_darkness),
+            Self::SunShadows => Some(&mut v.graphics.hd.sun_shadows),
+            Self::Grade => Some(&mut v.graphics.hd.grade),
+            _ => None,
+        }
     }
 
     fn hides(self) -> bool {
@@ -218,8 +331,12 @@ impl Opt {
         if let Some((volume, on)) = self.volume(v) {
             return Shown::Slider(percent(*volume, *on));
         }
+        if let Some(strength) = self.strength(v) {
+            return Shown::Slider(strength_percent(*strength));
+        }
         Shown::Choice(match self {
             Self::Hud => hud_label(v.hud),
+            Self::HdQuality => hd_quality_label(v.graphics.hd.preset),
             _ => UI_SCALE_LABELS[ui_scale_index(v.graphics.ui_scale)],
         })
     }
@@ -239,6 +356,16 @@ impl Opt {
         if let Some((volume, on)) = self.volume(v) {
             return step_volume(volume, on, how);
         }
+        if let Some(strength) = self.strength(v) {
+            let old = strength_percent(*strength);
+            let new = match how {
+                Change::Prev => old.saturating_sub(1) / VOLUME_STEP * VOLUME_STEP,
+                Change::Next => ((old / VOLUME_STEP + 1) * VOLUME_STEP).min(100),
+                Change::Flip => return false,
+            };
+            *strength = new as f32 / 100.0;
+            return new != old;
+        }
         match self {
             Self::Hud => {
                 let old = v.hud;
@@ -247,6 +374,17 @@ impl Opt {
                     (Change::Next, _) | (Change::Flip, HudLayout::Modern) => HudLayout::Classic,
                 };
                 v.hud != old
+            }
+            Self::HdQuality => {
+                let old = v.graphics.hd.preset;
+                let last = HD_QUALITIES.len() - 1;
+                let at = HD_QUALITIES.iter().position(|q| *q == old).unwrap_or(last);
+                v.graphics.hd.preset = HD_QUALITIES[match how {
+                    Change::Prev => at.saturating_sub(1),
+                    Change::Next => (at + 1).min(last),
+                    Change::Flip => (at + 1) % HD_QUALITIES.len(),
+                }];
+                v.graphics.hd.preset != old
             }
             _ => {
                 let old = ui_scale_index(v.graphics.ui_scale);
@@ -272,8 +410,15 @@ impl Opt {
             (*volume, *on) = (*dv, *don);
             return changed;
         }
+        if let (Some(strength), Some(&mut default)) = (self.strength(v), self.strength(defaults)) {
+            return std::mem::replace(strength, default) != default;
+        }
         match self {
             Self::Hud => std::mem::replace(&mut v.hud, defaults.hud) != defaults.hud,
+            Self::HdQuality => {
+                let preset = defaults.graphics.hd.preset;
+                std::mem::replace(&mut v.graphics.hd.preset, preset) != preset
+            }
             _ => {
                 let scale = defaults.graphics.ui_scale;
                 std::mem::replace(&mut v.graphics.ui_scale, scale) != scale
@@ -312,6 +457,21 @@ fn step_volume(volume: &mut f32, on: &mut bool, how: Change) -> bool {
     };
     set_volume(volume, on, new);
     new != old
+}
+
+/// An HD strength as its slider shows it: 0 to 100, the top at strength 1
+fn strength_percent(strength: f32) -> u32 {
+    (strength.clamp(0.0, 1.0) * 100.0).round() as u32
+}
+
+fn hd_quality_label(preset: HdPreset) -> &'static str {
+    match preset {
+        HdPreset::Low => "Low",
+        HdPreset::Medium => "Medium",
+        HdPreset::High => "High",
+        HdPreset::Ultra => "Ultra",
+        HdPreset::Custom => "Custom",
+    }
 }
 
 fn hud_label(hud: HudLayout) -> &'static str {
@@ -381,6 +541,25 @@ impl Page {
                 O(Opt::Fog),
                 O(Opt::SkillEffects),
                 O(Opt::Aura),
+                S("HD"),
+                O(Opt::Hd),
+                O(Opt::HdQuality),
+                O(Opt::Bloom),
+                O(Opt::LampGlow),
+                O(Opt::LightPools),
+                O(Opt::SunGlow),
+                O(Opt::Grass),
+                O(Opt::Flora),
+                O(Opt::SceneLight),
+                O(Opt::CloudShadows),
+                O(Opt::NightLook),
+                O(Opt::NightDarkness),
+                O(Opt::PlayerLight),
+                O(Opt::LampLight),
+                O(Opt::DayCycle),
+                O(Opt::SunShadows),
+                O(Opt::Grade),
+                O(Opt::Vignette),
             ],
             Self::OnScreen => &[
                 S("Names"),
@@ -478,6 +657,8 @@ pub(super) struct Settings {
     editing: Option<TextInput>,
     /// What the last key press did, said in the help line until the next move
     note: Option<String>,
+    /// How far an option page is scrolled down, in pixels
+    scroll: f32,
 }
 
 impl Settings {
@@ -637,6 +818,7 @@ impl Settings {
         if page != self.page {
             self.page = page;
             self.picked = 0;
+            self.scroll = 0.0;
         }
         self.capturing = None;
         self.editing = None;
@@ -725,17 +907,59 @@ impl Settings {
             }
         }
 
-        let mut y = area.y;
-        let mut index = 0;
+        // where each entry sits on the unscrolled page, to scroll it: the wheel, and the picked row kept in
+        // sight after a key moved it; only entries wholly in the area are drawn
+        let heading_h = style::line(ui) + 8.0;
+        let mut tops = Vec::new();
+        let mut bottom = 0.0;
+        let mut picked_top = 0.0;
+        let mut shown = 0;
         for (n, entry) in page.entries().iter().enumerate() {
             match entry {
-                Entry::Section(heading) => {
+                Entry::Section(_) => {
                     if n > 0 {
-                        y += SECTION_GAP;
+                        bottom += SECTION_GAP;
                     }
-                    y = frame::section(ui, area.x, y, area.w, heading);
+                    tops.push(bottom);
+                    bottom += heading_h;
                 }
                 Entry::Opt(opt) if opt.shown() => {
+                    if shown == self.picked {
+                        picked_top = bottom;
+                    }
+                    tops.push(bottom);
+                    bottom += ROW_H;
+                    shown += 1;
+                }
+                Entry::Opt(_) => tops.push(f32::NAN),
+            }
+        }
+        self.scroll += frame::wheel_step(ui, area) as f32 * ROW_H * 2.0;
+        if self.picked != before {
+            if picked_top < self.scroll {
+                self.scroll = picked_top;
+            } else if picked_top + ROW_H > self.scroll + area.h {
+                self.scroll = picked_top + ROW_H - area.h;
+            }
+        }
+        self.scroll = self.scroll.clamp(0.0, (bottom - area.h).max(0.0));
+        let in_view = |top: f32, h: f32| top >= self.scroll - 0.5 && top + h <= self.scroll + area.h + 0.5;
+
+        let mut index = 0;
+        for (n, entry) in page.entries().iter().enumerate() {
+            let top = tops[n];
+            let y = area.y + top - self.scroll;
+            match entry {
+                Entry::Section(heading) => {
+                    if in_view(top, heading_h) {
+                        frame::section(ui, area.x, y, area.w, heading);
+                    }
+                }
+                Entry::Opt(opt) if opt.shown() => {
+                    if !in_view(top, ROW_H) {
+                        index += 1;
+                        continue;
+                    }
                     let rect = Rect::new(area.x, y, area.w, ROW_H);
                     let id = WidgetId(ROW_BASE_ID + index as u32);
                     let resp = frame::row(ui, id, rect, index == self.picked);
@@ -758,7 +982,6 @@ impl Settings {
                             changed.push(*opt);
                         }
                     }
-                    y += ROW_H;
                     index += 1;
                 }
                 Entry::Opt(_) => {}
@@ -1280,3 +1503,7 @@ mod tests {
         assert_eq!(*settings, values().sound);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/hd_settings.rs"]
+mod hd_settings_tests;

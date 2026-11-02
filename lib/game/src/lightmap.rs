@@ -85,6 +85,16 @@ impl ActorLightmap {
     /// Tint at a fractional GAT position. Sampling follows world position, not
     /// the cell index, so the value changes smoothly as an actor walks.
     pub fn intensity_at_pos(&self, cx: f32, cy: f32) -> [f32; 3] {
+        self.tint_at_pos(cx, cy, false)
+    }
+
+    /// The tint with the baked shadow read as fully lit: while HD sun shadows run, the map's fixed-sun shadow
+    /// steps aside (the baked lamp colour stays).
+    pub fn intensity_lit_at_pos(&self, cx: f32, cy: f32) -> [f32; 3] {
+        self.tint_at_pos(cx, cy, true)
+    }
+
+    fn tint_at_pos(&self, cx: f32, cy: f32, lit: bool) -> [f32; 3] {
         let (ix, iy) = (cx.floor() as i32, cy.floor() as i32);
         if ix < 0 || iy < 0 || ix >= self.gat_width || iy >= self.gat_height {
             return [1.0; 3];
@@ -97,6 +107,7 @@ impl ActorLightmap {
         let tx = cx / 2.0 * CELL_STRIDE as f32;
         let ty = cy / 2.0 * CELL_STRIDE as f32;
         let (shadow, color) = self.sample_bilinear(tx, ty);
+        let shadow = if lit { 255.0 } else { shadow };
 
         let mut out = [0.0f32; 3];
         for c in 0..3 {
@@ -109,6 +120,21 @@ impl ActorLightmap {
             }
         }
         out
+    }
+
+    /// The raw baked light colour (0 to 1) at a fractional GAT position, the same texels the terrain samples; 0
+    /// off the map or on a raised cell.
+    pub fn baked_at_pos(&self, cx: f32, cy: f32) -> [f32; 3] {
+        let (ix, iy) = (cx.floor() as i32, cy.floor() as i32);
+        if ix < 0 || iy < 0 || ix >= self.gat_width || iy >= self.gat_height {
+            return [0.0; 3];
+        }
+        if !self.on_ground[(iy * self.gat_width + ix) as usize] {
+            return [0.0; 3];
+        }
+        let tx = cx / 2.0 * CELL_STRIDE as f32;
+        let ty = cy / 2.0 * CELL_STRIDE as f32;
+        self.sample_bilinear(tx, ty).1.map(|c| c / 255.0)
     }
 
     pub fn intensity_at(&self, cx: i32, cy: i32) -> [f32; 3] {
@@ -230,6 +256,7 @@ mod tests {
             })
             .collect();
         let gnd = GndFile {
+            water: None,
             version: (1, 7),
             width: 4,
             height: 4,
@@ -281,6 +308,7 @@ mod tests {
             color: [0; 192],
         };
         let gnd = GndFile {
+            water: None,
             version: (1, 7),
             width: 2,
             height: 1,

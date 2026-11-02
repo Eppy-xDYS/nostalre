@@ -27,6 +27,7 @@ pub mod effects;
 pub mod emotion;
 pub mod gm;
 pub mod gr2_model;
+pub mod hd;
 pub mod graffiti;
 pub mod inventory;
 pub mod item;

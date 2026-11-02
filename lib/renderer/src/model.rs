@@ -8,6 +8,7 @@ use nostalre_formats::rsw::{RswFile, RswObject};
 use crate::device::DEPTH_FORMAT;
 use crate::global_uniforms::GlobalUniforms;
 use crate::matrix_texture::MatrixTexture;
+use crate::post::glow;
 use crate::rsm_anim;
 use crate::texture::TextureCache;
 
@@ -20,10 +21,12 @@ pub struct ModelVertex {
     pub alpha: f32,
     pub lit_scale: f32,
     pub unlit: f32,
+    /// 1 on a lamp texture (see `post::glow`), 0 elsewhere
+    pub emissive: f32,
 }
 
 impl ModelVertex {
-    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ModelVertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &wgpu::vertex_attr_array![
@@ -33,6 +36,7 @@ impl ModelVertex {
             3 => Float32,
             4 => Float32,
             5 => Float32,
+            6 => Float32,
         ],
     };
 }
@@ -45,6 +49,8 @@ struct DrawBatch {
 
 pub struct ModelRenderer {
     pipeline: wgpu::RenderPipeline,
+    /// Depth from the sun for HD sun shadows (`shadow`); the map's own models only
+    shadow_pipeline: Option<wgpu::RenderPipeline>,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     batches: Vec<DrawBatch>,
@@ -80,6 +86,10 @@ impl BoundingBox {
 pub struct RswModelRenderers {
     pub static_models: Option<ModelRenderer>,
     pub animated_models: Option<AnimatedModelRenderer>,
+    /// The top of every lamp model on the map: their light at night (`scene_light::lamp_light`)
+    pub lamp_heads: Vec<glam::Vec3>,
+    /// Cells under a static model's floor (see `grass::classify::floor_cells`); empty without static models
+    pub floor_cells: Vec<bool>,
 }
 
 impl ModelRenderer {
@@ -109,6 +119,8 @@ impl ModelRenderer {
             return RswModelRenderers {
                 static_models: None,
                 animated_models: None,
+                lamp_heads: Vec::new(),
+                floor_cells: Vec::new(),
             };
         }
 
@@ -117,6 +129,7 @@ impl ModelRenderer {
         let (rsm_cache, static_instances, animated_instances) =
             load_rsw_instances(&rsw_models, gnd, grf);
 
+        let mut lamp_heads = Vec::new();
         let (vertices, indices, batches) = build_mesh(
             &rsm_cache,
             &static_instances,
@@ -124,7 +137,15 @@ impl ModelRenderer {
             texture_cache,
             device,
             queue,
+            &mut lamp_heads,
         );
+        for (rsm_path, instances) in &animated_instances {
+            let (Some(rsm), true) = (rsm_cache.get(rsm_path), Lamp::of(rsm_path).lights()) else {
+                continue;
+            };
+            let (bbox, _) = calc_bounding_box(rsm);
+            lamp_heads.extend(instances.iter().map(|inst| lamp_head(rsm, &bbox, &inst.instance_matrix)));
+        }
 
         let animated_models = AnimatedModelRenderer::build(
             &rsm_cache,
@@ -153,8 +174,16 @@ impl ModelRenderer {
             return RswModelRenderers {
                 static_models: None,
                 animated_models,
+                lamp_heads,
+                floor_cells: Vec::new(),
             };
         }
+        let floor_cells = crate::grass::classify::floor_cells(
+            gnd,
+            indices
+                .chunks_exact(3)
+                .map(|t| [t[0], t[1], t[2]].map(|i| vertices[i as usize].position)),
+        );
 
         let vertex_buffer = create_buffer(
             device,
@@ -172,14 +201,26 @@ impl ModelRenderer {
             &texture_cache.bind_group_layout,
         );
 
+        let shadow_pipeline = crate::shadow::caster_pipeline(
+            device,
+            &global_uniforms.shadow_pass_layout,
+            &texture_cache.bind_group_layout,
+            None,
+            ModelVertex::LAYOUT,
+            "vs_model",
+        );
+
         RswModelRenderers {
             static_models: Some(Self {
                 pipeline,
+                shadow_pipeline: Some(shadow_pipeline),
                 vertex_buffer,
                 index_buffer,
                 batches,
             }),
             animated_models,
+            lamp_heads,
+            floor_cells,
         }
     }
 
@@ -217,6 +258,7 @@ impl ModelRenderer {
                 &instance_matrix,
                 is_only,
                 alpha,
+                Lamp::No,
                 &mut texture_quads,
             );
         }
@@ -255,6 +297,7 @@ impl ModelRenderer {
         Some((
             Self {
                 pipeline,
+                shadow_pipeline: None,
                 vertex_buffer,
                 index_buffer,
                 batches,
@@ -300,6 +343,7 @@ impl ModelRenderer {
                 &instance_matrix,
                 is_only,
                 alpha,
+                Lamp::No,
                 &mut texture_quads,
             );
         }
@@ -331,10 +375,33 @@ impl ModelRenderer {
 
         Some(Self {
             pipeline,
+            shadow_pipeline: None,
             vertex_buffer,
             index_buffer,
             batches,
         })
+    }
+
+    /// The map's models' depth into the sun-shadow map (nothing for models without a caster pipeline).
+    pub fn render_shadow<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        pass_bind_group: &'a wgpu::BindGroup,
+        texture_cache: &'a TextureCache,
+    ) {
+        let Some(pipeline) = &self.shadow_pipeline else {
+            return;
+        };
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, pass_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        for batch in &self.batches {
+            if let Some(tex_bg) = texture_cache.get(&batch.texture_name) {
+                pass.set_bind_group(1, tex_bg, &[]);
+                pass.draw_indexed(batch.start_index..batch.start_index + batch.index_count, 0, 0..1);
+            }
+        }
     }
 
     pub fn render<'a>(
@@ -372,10 +439,12 @@ pub struct AnimatedModelVertex {
     pub node_slot: u32,
     pub lit_scale: f32,
     pub unlit: f32,
+    /// 1 on a lamp texture (see `post::glow`), 0 elsewhere
+    pub emissive: f32,
 }
 
 impl AnimatedModelVertex {
-    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<AnimatedModelVertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &wgpu::vertex_attr_array![
@@ -386,6 +455,7 @@ impl AnimatedModelVertex {
             4 => Uint32,
             5 => Float32,
             6 => Float32,
+            7 => Float32,
         ],
     };
 }
@@ -413,6 +483,8 @@ struct AnimatedInstance {
 /// scales with node count rather than vertex count.
 pub struct AnimatedModelRenderer {
     pipeline: wgpu::RenderPipeline,
+    /// Depth from the sun for HD sun shadows (`shadow`)
+    shadow_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     batches: Vec<DrawBatch>,
@@ -479,6 +551,7 @@ impl AnimatedModelRenderer {
                         (slot_base + node_idx) as u32,
                         frame0.determinant(),
                         inst.alpha,
+                        Lamp::of(rsm_path),
                         &mut texture_quads,
                     );
                 }
@@ -540,11 +613,20 @@ impl AnimatedModelRenderer {
             &texture_cache.bind_group_layout,
             &node_layout,
         );
+        let shadow_pipeline = crate::shadow::caster_pipeline(
+            device,
+            &global_uniforms.shadow_pass_layout,
+            &texture_cache.bind_group_layout,
+            Some(&node_layout),
+            AnimatedModelVertex::LAYOUT,
+            "vs_animated",
+        );
 
         let max_nodes = models.iter().map(|m| m.rsm.nodes.len()).max().unwrap_or(0);
 
         let renderer = Self {
             pipeline,
+            shadow_pipeline,
             vertex_buffer,
             index_buffer,
             batches,
@@ -594,6 +676,26 @@ impl AnimatedModelRenderer {
 
     fn write_matrices(&self, queue: &wgpu::Queue) {
         self.node_texture.write(queue, &self.matrices);
+    }
+
+    /// The posed models' depth into the sun-shadow map.
+    pub fn render_shadow<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        pass_bind_group: &'a wgpu::BindGroup,
+        texture_cache: &'a TextureCache,
+    ) {
+        pass.set_pipeline(&self.shadow_pipeline);
+        pass.set_bind_group(0, pass_bind_group, &[]);
+        pass.set_bind_group(2, &self.node_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        for batch in &self.batches {
+            if let Some(tex_bg) = texture_cache.get(&batch.texture_name) {
+                pass.set_bind_group(1, tex_bg, &[]);
+                pass.draw_indexed(batch.start_index..batch.start_index + batch.index_count, 0, 0..1);
+            }
+        }
     }
 
     pub fn render<'a>(
@@ -694,6 +796,7 @@ fn compile_animated_node(
     node_slot: u32,
     determinant: f32,
     alpha: f32,
+    lamp: Lamp,
     texture_quads: &mut HashMap<String, (Vec<AnimatedModelVertex>, Vec<u32>)>,
 ) {
     let normal_sign = if determinant < 0.0 { -1.0 } else { 1.0 };
@@ -721,6 +824,7 @@ fn compile_animated_node(
 
         let tex_name = resolve_texture_name(rsm, node, face.texture_index);
         let tex_path = nostalre_resources::texture::named(&tex_name);
+        let emissive = lamp.emissive(&tex_path, face_uv_centre(node, face));
 
         let entry = texture_quads
             .entry(tex_path)
@@ -746,11 +850,71 @@ fn compile_animated_node(
                 node_slot,
                 lit_scale: tex_vertex_lit_scale(node, tid),
                 unlit,
+                emissive,
             });
         }
 
         entry.1.extend_from_slice(&[base, base + 1, base + 2]);
     }
+}
+
+/// How a model's faces glow (`post::glow`): not at all, by the name and mask rule, or on the hand-picked glass of
+/// `post::lamp_glass`.
+#[derive(Clone, Copy)]
+enum Lamp {
+    No,
+    Named,
+    Glass(&'static [crate::post::lamp_glass::Glass]),
+}
+
+impl Lamp {
+    fn of(rsm_path: &str) -> Self {
+        match glow::glass_for(rsm_path) {
+            Some(glass) => Self::Glass(glass),
+            None if glow::is_lamp_name(rsm_path) => Self::Named,
+            None => Self::No,
+        }
+    }
+
+    /// A lamp that lights its surroundings at night: one with glass, or one known only by name.
+    fn lights(self) -> bool {
+        match self {
+            Self::No => false,
+            Self::Named => true,
+            Self::Glass(glass) => !glass.is_empty(),
+        }
+    }
+
+    /// The glow of a face on `tex_path` whose UV centre is `uv`.
+    fn emissive(self, tex_path: &str, uv: [f32; 2]) -> f32 {
+        match self {
+            Self::Glass(glass) => glow::glass_face(glass, tex_path, uv),
+            Self::Named => glow::emissive(true, tex_path),
+            Self::No => glow::emissive(false, tex_path),
+        }
+    }
+}
+
+/// The UV centre of a face.
+fn face_uv_centre(node: &RsmNode, face: &nostalre_formats::rsm::RsmFace) -> [f32; 2] {
+    let mut sum = [0.0f32; 2];
+    for &t in &face.tex_vertex_ids {
+        if let Some(tv) = node.tex_vertices.get(t as usize) {
+            sum[0] += tv.u;
+            sum[1] += tv.v;
+        }
+    }
+    [sum[0] / 3.0, sum[1] / 3.0]
+}
+
+/// Where a lamp's light sits: over the centre of its box, at its top or `LAMP_HANG` above its base, whichever
+/// is lower, in the world (up is -y).
+fn lamp_head(rsm: &RsmFile, bbox: &BoundingBox, instance_matrix: &glam::Mat4) -> glam::Vec3 {
+    let root = model_root_matrix(rsm, bbox);
+    let corners = [bbox.min, bbox.max].map(|c| instance_matrix.transform_point3(root.transform_point3(c)));
+    let centre = (corners[0] + corners[1]) * 0.5;
+    let (top, base) = (corners[0].y.min(corners[1].y), corners[0].y.max(corners[1].y));
+    glam::Vec3::new(centre.x, crate::scene_light::lamp_light_y(top, base), centre.z)
 }
 
 struct ModelInstance {
@@ -839,6 +1003,7 @@ fn build_mesh(
     texture_cache: &mut TextureCache,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    lamp_heads: &mut Vec<glam::Vec3>,
 ) -> (Vec<ModelVertex>, Vec<u32>, Vec<DrawBatch>) {
     let mut texture_quads: HashMap<String, (Vec<ModelVertex>, Vec<u32>)> = HashMap::new();
 
@@ -857,7 +1022,11 @@ fn build_mesh(
 
         let (bbox, node_matrices) = calc_bounding_box(rsm);
 
+        let lamp = Lamp::of(rsm_path);
         for inst in instances {
+            if lamp.lights() {
+                lamp_heads.push(lamp_head(rsm, &bbox, &inst.instance_matrix));
+            }
             for (node_idx, node) in rsm.nodes.iter().enumerate() {
                 compile_node(
                     node,
@@ -867,6 +1036,7 @@ fn build_mesh(
                     &inst.instance_matrix,
                     is_only,
                     inst.alpha,
+                    lamp,
                     &mut texture_quads,
                 );
             }
@@ -1080,6 +1250,7 @@ fn compile_node(
     instance_matrix: &glam::Mat4,
     is_only: bool,
     alpha: f32,
+    lamp: Lamp,
     texture_quads: &mut HashMap<String, (Vec<ModelVertex>, Vec<u32>)>,
 ) {
     let matrix = model_root_matrix(rsm, bbox) * *node_matrix * node_post_matrix(rsm, node, is_only);
@@ -1119,6 +1290,7 @@ fn compile_node(
 
         let tex_name = resolve_texture_name(rsm, node, face.texture_index);
         let tex_path = nostalre_resources::texture::named(&tex_name);
+        let emissive = lamp.emissive(&tex_path, face_uv_centre(node, face));
 
         let entry = texture_quads
             .entry(tex_path)
@@ -1143,6 +1315,7 @@ fn compile_node(
                 alpha,
                 lit_scale: tex_vertex_lit_scale(node, tid),
                 unlit,
+                emissive,
             });
         }
 
@@ -1627,6 +1800,7 @@ mod tests {
             &glam::Mat4::IDENTITY,
             true,
             1.0,
+            Lamp::No,
             &mut texture_quads,
         );
         texture_quads.into_values().next().unwrap().0

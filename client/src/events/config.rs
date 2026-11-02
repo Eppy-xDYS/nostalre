@@ -126,7 +126,9 @@ impl App {
             filter_effects,
             filter_sprites,
             sprite_upscale,
+            hd,
         } = settings;
+        let hd_changed = hd != self.config.custom.hd;
         let fullscreen_changed = fullscreen != self.config.fullscreen;
         let aura_changed = display.show_level_aura != self.config.display.show_level_aura;
         let ui_scale_changed = ui_scale != self.config.dpi_scale;
@@ -169,6 +171,27 @@ impl App {
                     ui_ctx.screen_height = phys_h / new_dpi;
                 }
             }
+        }
+        if hd_changed {
+            let running = self.renderer.as_ref().is_some_and(|r| r.hd_running());
+            if nostalre_game::hd::needs_restart(&self.config.custom.hd, &hd, running) {
+                self.windows
+                    .chat_window
+                    .add_system("HD: restart to apply".to_string());
+            }
+            if let Some(renderer) = &mut self.renderer {
+                // turning HD off stops its effects now; the target goes on the next start
+                renderer.set_hd_effects(hd.enabled);
+                renderer.set_hd_bloom(hd.bloom_levels(), hd.bloom_intensity());
+                renderer.set_hd_grade(hd.grade_strength(), hd.vignette);
+                renderer.set_hd_glow(hd.glow_levels());
+                renderer.set_hd_grass(hd.grass_density());
+                renderer.set_hd_flora(hd.flora_density());
+                renderer.set_hd_grass_tier(hd.grass_tier());
+                renderer.set_hd_scene(crate::config::Config::hd_scene(&hd));
+                renderer.set_hd_shadows(hd.shadow_strength(), hd.shadow_tier());
+            }
+            self.config.custom.hd = hd;
         }
         if let Some(renderer) = &mut self.renderer {
             renderer.set_fog(if fog { self.map_fog } else { None });

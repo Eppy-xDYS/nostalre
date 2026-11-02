@@ -31,6 +31,9 @@ const SHADOW_SCALE: f32 = 1.2;
 /// Floor items take a much smaller shadow than actors: `1.2 * 0.4`.
 const FLOOR_ITEM_SHADOW_SCALE: f32 = SHADOW_SCALE * 0.4;
 
+/// Where lamps light an actor: half a ground cell above its feet (world units).
+const ACTOR_CHEST: f32 = 5.0;
+
 impl App {
     /// Stealth-visibility relationship of the local player to `gid`: their own
     /// body, a party member's, or a stranger's.
@@ -57,16 +60,36 @@ impl App {
             .has_status(nostalre_game::sprite_path::EFST_CLAIRVOYANCE)
     }
 
-    /// Ground-lightmap tint for a sprite standing at `cell` (GAT coordinates).
+    /// Ground-lightmap tint for a sprite standing at `cell` (GAT coordinates), times the HD scene light there
+    /// (lamps, and at night the baked light pools).
     fn actor_light(&self, cell: (f32, f32)) -> [f32; 3] {
-        let lightmap_on = self.renderer.as_ref().is_some_and(|r| r.lightmap_enabled());
-        if !lightmap_on {
+        let Some(renderer) = self.renderer.as_ref() else {
             return [1.0; 3];
-        }
-        match &self.game.session.actor_lightmap {
-            Some(lm) => lm.intensity_at_pos(cell.0, cell.1),
-            None => [1.0; 3],
-        }
+        };
+        let lightmap = self
+            .game
+            .session
+            .actor_lightmap
+            .as_ref()
+            .filter(|_| renderer.lightmap_enabled());
+        // while sun shadows run, the map's baked (fixed-sun) shadow steps aside, as on the ground
+        let tint = lightmap.map_or([1.0; 3], |lm| {
+            if renderer.sun_shadows_active() {
+                lm.intensity_lit_at_pos(cell.0, cell.1)
+            } else {
+                lm.intensity_at_pos(cell.0, cell.1)
+            }
+        });
+        let (Some(gat), Some(coords)) = (&self.game.session.gat, &self.game.session.map_coords) else {
+            return tint;
+        };
+        let (cx, cy) = (cell.0 + 0.5, cell.1 + 0.5);
+        let (wx, _, wz) = coords.cell_to_world(cx, cy);
+        // the chest, about half a cell up (up is -y)
+        let world = glam::Vec3::new(wx, gat.get_height(cx, cy) - ACTOR_CHEST, wz);
+        let baked = lightmap.map_or([0.0; 3], |lm| lm.baked_at_pos(cell.0, cell.1));
+        let scene = renderer.actor_scene_light(world, baked);
+        std::array::from_fn(|i| tint[i] * scene[i])
     }
 
     pub(crate) fn compose_and_render(

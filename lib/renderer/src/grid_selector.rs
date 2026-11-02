@@ -57,6 +57,8 @@ impl GridSelectorRenderer {
         grf: &GrfArchive,
     ) -> Self {
         let texture_name = nostalre_resources::texture::GRID.to_string();
+        // loaded once, not per map
+        texture_cache.pin(&texture_name);
         if texture_cache
             .get_or_load(&texture_name, grf, device, queue, false)
             .is_none()

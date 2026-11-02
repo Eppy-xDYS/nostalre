@@ -396,6 +396,9 @@ impl App {
         if let Some(renderer) = &mut self.renderer {
             let fog = if self.config.fog { map_data.fog } else { None };
             renderer.load_map(&map_data.gnd, &map_data.rsw, grf, fog);
+            renderer.set_map_indoor(map_data.indoor);
+            renderer.set_map_grade(map_name);
+            renderer.load_grass(&map_data.gnd, &map_data.rsw, grf, map_name, map_data.indoor);
 
             // the map's own effects now; every other effect loads a little each frame (`effect_loader`)
             spr_paths.sort();
@@ -430,7 +433,7 @@ impl App {
             let mut grid = GridSelectorRenderer::new(
                 &renderer.device.device,
                 &renderer.device.queue,
-                renderer.device.scene_format,
+                renderer.world_format(),
                 &renderer.global_uniforms,
                 &mut renderer.texture_cache,
                 grf,
@@ -817,6 +820,21 @@ impl ApplicationHandler for App {
             window.clone(),
             self.config.font_px_height(),
             dpi_scale,
+            nostalre_renderer::post::HdOptions {
+                enabled: self.config.custom.hd.enabled,
+                float_target: self.config.custom.hd.wants_float_target(),
+                bloom_levels: self.config.custom.hd.bloom_levels(),
+                bloom_intensity: self.config.custom.hd.bloom_intensity(),
+                grade: self.config.custom.hd.grade_strength(),
+                vignette: self.config.custom.hd.vignette,
+                glow: self.config.custom.hd.glow_levels(),
+                grass: self.config.custom.hd.grass_density(),
+                flora: self.config.custom.hd.flora_density(),
+                grass_tier: self.config.custom.hd.grass_tier(),
+                scene: config::Config::hd_scene(&self.config.custom.hd),
+                shadow_strength: self.config.custom.hd.shadow_strength(),
+                shadow_tier: self.config.custom.hd.shadow_tier(),
+            },
         ));
         renderer.set_fog_scale(self.config.custom.fog_scale);
         renderer.set_world_filtering(self.config.custom.filtering.world, None);
