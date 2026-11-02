@@ -52,6 +52,8 @@ struct GrassUniforms {
     // width / height of one variant
     aspect: f32,
     _pad: f32,
+    // per flora (flora::LOOKS): height share, card aspect, sway, own colours
+    flora: array<vec4<f32>, 6>,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
@@ -71,6 +73,12 @@ const MAX_HEIGHT: f32 = 9.5;
 // a quad stands this share of its height above the root; the rest sinks into the ground so no tuft floats on a slope
 const ABOVE: f32 = 0.88;
 const MAX_LEAN: f32 = 0.16;
+// twins of classify::KINDS / FLORA_COLUMNS: kinds from 3 on are flora (fern, brown mushroom, red mushroom, flower,
+// leafy plant, nest fern)
+const KINDS: u32 = 3u;
+const FLORA_COLUMNS: u32 = 3u;
+// flora cells start a hair below the row above, so its roots do not bleed into their tips (share of a row)
+const FLORA_ROW_INSET: f32 = 0.012;
 // wind push at the tip, in world units
 const WIND: f32 = 1.2;
 // share of the tuft over which the base dissolves into the ground
@@ -94,6 +102,10 @@ struct VertexOutput {
     @location(4) view_pos: vec3<f32>,
     // above the root, in world units
     @location(5) rise: f32,
+    // where in the art: the grass row (top half) or the flora row (bottom half)
+    @location(6) art_uv: vec2<f32>,
+    // 1: the art's own colours, untinted (mushrooms, flowers)
+    @location(7) @interpolate(flat) own_colour: f32,
 };
 
 fn hash12(p: vec2<f32>) -> f32 {
@@ -120,14 +132,20 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     }
 
     let tint = vec3<f32>(f32((p >> 11u) & 31u) / 31.0, f32((p >> 5u) & 63u) / 63.0, f32(p & 31u) / 31.0);
-    let yaw = f32((p >> 16u) & 63u) / 64.0 * 2.0 * PI;
-    let size = SIZE_MIN + f32((p >> 22u) & 31u) / 31.0 * (SIZE_MAX - SIZE_MIN);
-    let variant = f32((p >> 27u) & 3u) % grass.variants;
-    let lean_amount = f32((p >> 29u) & 7u) / 7.0 * MAX_LEAN;
+    let yaw = f32((p >> 16u) & 31u) / 32.0 * 2.0 * PI;
+    let size = SIZE_MIN + f32((p >> 21u) & 31u) / 31.0 * (SIZE_MAX - SIZE_MIN);
+    let kind = (p >> 26u) & 15u;
+    let is_flora = kind >= KINDS;
+    let flora = min(kind - min(kind, KINDS), 5u);
+    // grass: full height, the art's aspect, full sway, tinted
+    let look = select(vec4<f32>(1.0, grass.aspect, 1.0, 0.0), grass.flora[flora], is_flora);
+    let variant = f32(kind % 4u) % grass.variants;
+    let lean_amount = f32((p >> 30u) & 3u) / 3.0 * MAX_LEAN * select(1.0, 0.3, is_flora);
 
     let dist = distance(in.root.xz, grass.focus);
     let grow = 1.0 - smoothstep(grass.far * 0.72, grass.far, dist);
-    let tall = size / SIZE_MAX * MAX_HEIGHT / ABOVE;
+    let tall = size / SIZE_MAX * MAX_HEIGHT / ABOVE * look.x;
+    let aspect = look.y;
 
     // corners 0, 1: tip left, right; 2, 3: root left, right
     var corners = array<u32, 6>(0u, 1u, 3u, 3u, 2u, 0u);
@@ -135,7 +153,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let tip = corner < 2u;
     let side = select(1.0, -1.0, corner == 0u || corner == 2u);
     let theta = yaw + f32(quad) * PI / quads;
-    let across = vec2<f32>(cos(theta), sin(theta)) * (0.5 * tall * grass.aspect) * side;
+    let across = vec2<f32>(cos(theta), sin(theta)) * (0.5 * tall * aspect) * side;
     // heights grow downward: up is -y
     var offset = vec3<f32>(across.x, select(tall * (1.0 - ABOVE), -tall * ABOVE, tip), across.y);
     if (tip) {
@@ -146,9 +164,16 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let flip = hash11(seed * 13.0 + f32(quad)) > 0.5;
     let u = select(1.0, 0.0, (side < 0.0) != flip);
     let uv = vec2<f32>((variant + u) / grass.variants, select(1.0, 0.0, tip));
+    // the art: the grass row, then two flora rows of FLORA_COLUMNS cells
+    let flora_row = f32(1u + flora / FLORA_COLUMNS);
+    let flora_uv = vec2<f32>(
+        (f32(flora % FLORA_COLUMNS) + u) / f32(FLORA_COLUMNS),
+        (flora_row + select(1.0, FLORA_ROW_INSET, tip)) / 3.0,
+    );
+    let art_uv = select(vec2<f32>(uv.x, uv.y / 3.0), flora_uv, is_flora);
 
     // the tip whips, the base stays planted
-    let tip_share = 1.0 - uv.y;
+    let tip_share = (1.0 - uv.y) * look.z;
     let phase = seed * 6.2831853;
     let gust = sin(grass.time * 1.7 + phase + (in.root.x + in.root.z) * 0.018);
     let flick = sin(grass.time * 4.3 + phase * 2.3) * 0.35;
@@ -158,6 +183,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
     out.clip_position = camera.view_proj * vec4<f32>(world, 1.0);
     out.uv = uv;
+    out.art_uv = art_uv;
+    out.own_colour = look.w;
     out.tint = tint;
     out.seed = seed;
     out.world_position = world;
@@ -322,8 +349,10 @@ fn shade(in: VertexOutput, texel: vec4<f32>) -> vec3<f32> {
     // on ground that is not green, the art's own colour gives way to the ground's
     let green = clamp((in.tint.g / max(max(in.tint.r, in.tint.b), 0.001) - 1.0) * 6.0, 0.0, 1.0);
     let art_colour = mix(vec3<f32>(luma(texel.rgb)), texel.rgb, green * grass.colored);
-    var surface = art_colour * in.tint * grass.gain * mix(1.0, 0.66, in.uv.y * in.uv.y);
-    surface = mix(vec3<f32>(luma(surface)), surface, SATURATION);
+    let root_dark = mix(1.0, 0.66, in.uv.y * in.uv.y);
+    let tinted = art_colour * in.tint * grass.gain * root_dark;
+    var surface = mix(tinted, texel.rgb * root_dark, in.own_colour);
+    surface = mix(vec3<f32>(luma(surface)), surface, mix(SATURATION, 1.0, in.own_colour));
 
     let cell = cell_light_at(in.world_position);
     // lit like the flat ground under it
@@ -353,7 +382,7 @@ fn shade(in: VertexOutput, texel: vec4<f32>) -> vec3<f32> {
 // the core: alpha tested, writes depth
 @fragment
 fn fs_core(in: VertexOutput) -> @location(0) vec4<f32> {
-    let texel = textureSample(art, art_sampler, in.uv);
+    let texel = textureSample(art, art_sampler, in.art_uv);
     if (coverage(in, texel) < CORE_CUT) {
         discard;
     }
@@ -363,7 +392,7 @@ fn fs_core(in: VertexOutput) -> @location(0) vec4<f32> {
 // the soft rim: the blade edges and the dissolving base, blended over the core without writing depth
 @fragment
 fn fs_rim(in: VertexOutput) -> @location(0) vec4<f32> {
-    let texel = textureSample(art, art_sampler, in.uv);
+    let texel = textureSample(art, art_sampler, in.art_uv);
     let a = coverage(in, texel);
     if (a >= CORE_CUT || a < 0.02) {
         discard;

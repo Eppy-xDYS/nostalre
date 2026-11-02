@@ -50,6 +50,8 @@ pub struct HdConfig {
     pub sun_glow: f32,
     /// Grass density, 0 to 1 (0: none)
     pub grass: f32,
+    /// Ferns, mushrooms and flowers among the grass, 0 to 1 (0: grass only; 0.5 as designed)
+    pub flora: f32,
     /// Softer lightmaps, floor-only baked shadows and map lamps lighting the ground
     pub scene_light: bool,
     /// Drifting cloud shadows outdoors, 0 to 1 (0: none)
@@ -80,6 +82,7 @@ impl Default for HdConfig {
             light_pools: 0.5,
             sun_glow: 0.3,
             grass: 1.0,
+            flora: 0.5,
             scene_light: true,
             cloud_shadows: 0.6,
             night_look: true,
@@ -135,6 +138,10 @@ impl HdConfig {
 
     pub fn grass_density(&self) -> f32 {
         clamp_or_zero(self.grass, 1.0)
+    }
+
+    pub fn flora_density(&self) -> f32 {
+        clamp_or_zero(self.flora, 1.0)
     }
 
     /// Grass quality, 0 (Low) to 3 (Ultra): tufts per cell and the map's cap.

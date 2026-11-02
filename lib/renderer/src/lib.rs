@@ -363,13 +363,15 @@ impl Renderer {
         let global_uniforms = GlobalUniforms::new(&device.device);
         let texture_cache = TextureCache::new(&device.device);
         let grass = post.is_some().then(|| {
-            grass::GrassRenderer::new(
+            let mut grass = grass::GrassRenderer::new(
                 &device.device,
                 &device.queue,
                 world_format,
                 &global_uniforms,
                 &texture_cache.bind_group_layout,
-            )
+            );
+            grass.set_flora(hd.flora);
+            grass
         });
 
         let gr2_pipeline = Gr2ModelPipeline::new(
@@ -645,6 +647,13 @@ impl Renderer {
         self.grass_density = density;
         if let Some(grass) = &mut self.grass {
             grass.set_density(density);
+        }
+    }
+
+    /// Ferns, mushrooms and flowers among the grass, 0 to 1 (Settings), applied to the current map at once.
+    pub fn set_hd_flora(&mut self, flora: f32) {
+        if let Some(grass) = &mut self.grass {
+            grass.set_flora(flora);
         }
     }
 

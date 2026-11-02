@@ -30,6 +30,8 @@ pub struct HdOptions {
     pub glow: [f32; 3],
     /// Grass density, 0 to 1
     pub grass: f32,
+    /// Flora among the grass, 0 to 1
+    pub flora: f32,
     /// Grass quality, 0 Low to 3 Ultra
     pub grass_tier: u8,
     /// Scene light rows (lightmaps, lamps, clouds, night)

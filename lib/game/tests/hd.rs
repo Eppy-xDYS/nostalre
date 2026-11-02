@@ -338,3 +338,12 @@ fn shadow_defaults_and_tier() {
     };
     assert!(!hd::needs_restart(&on, &with(0.0), true), "live");
 }
+
+#[test]
+fn flora_density_default_and_clamped() {
+    assert_eq!(HdConfig::default().flora_density(), 0.5);
+    let with = |flora| HdConfig { flora, ..HdConfig::default() };
+    assert_eq!(with(3.0).flora_density(), 1.0);
+    assert_eq!(with(-1.0).flora_density(), 0.0);
+    assert_eq!(with(f32::NAN).flora_density(), 0.0);
+}

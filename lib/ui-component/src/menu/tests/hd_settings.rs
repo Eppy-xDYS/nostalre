@@ -34,6 +34,7 @@ fn hd_rows_on_graphics_page() {
             Opt::LightPools,
             Opt::SunGlow,
             Opt::Grass,
+            Opt::Flora,
             Opt::SceneLight,
             Opt::CloudShadows,
             Opt::NightLook,
@@ -222,7 +223,7 @@ fn grass_slider_live() {
 const SCENE_ROWS: [Opt; 3] = [Opt::SceneLight, Opt::CloudShadows, Opt::NightLook];
 
 #[test]
-fn scene_rows_after_grass() {
+fn scene_rows_after_grass_and_flora() {
     let rows: Vec<Opt> = Page::Graphics
         .entries()
         .iter()
@@ -232,7 +233,8 @@ fn scene_rows_after_grass() {
         })
         .collect();
     let grass = rows.iter().position(|o| *o == Opt::Grass).unwrap();
-    assert_eq!(rows[grass + 1..grass + 4], SCENE_ROWS, "right after Grass");
+    assert_eq!(rows[grass + 1], Opt::Flora, "Flora right after Grass");
+    assert_eq!(rows[grass + 2..grass + 5], SCENE_ROWS, "then the scene rows");
     let labels: Vec<&str> = SCENE_ROWS.iter().map(|o| o.label()).collect();
     assert_eq!(labels, ["Scene light", "Cloud shadows", "Night look"]);
     assert!(SCENE_ROWS.iter().all(|o| o.group() == Group::Graphics));
@@ -375,4 +377,20 @@ fn sun_shadow_row() {
     let mut defaults = values();
     assert!(Opt::SunShadows.reset(&mut v, &mut defaults));
     assert!((v.graphics.hd.sun_shadows - 0.65).abs() < 1e-6);
+}
+
+#[test]
+fn flora_slider_live() {
+    let mut v = values();
+    assert!(matches!(Opt::Flora.shown_value(&mut v), Shown::Slider(50)), "default 50 %");
+    for _ in 0..30 {
+        Opt::Flora.change(&mut v, Change::Prev);
+    }
+    assert_eq!(v.graphics.hd.flora, 0.0, "0 %: grass only");
+    let mut defaults = values();
+    assert!(Opt::Flora.reset(&mut v, &mut defaults));
+    assert_eq!(v.graphics.hd.flora, 0.5);
+    assert_eq!(Opt::Flora.group(), Group::Graphics);
+    assert!(!Opt::Flora.help().contains("restart"), "applies live");
+    assert!(Opt::Flora.help().contains("0%: grass only"));
 }

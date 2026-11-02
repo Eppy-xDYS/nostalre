@@ -6,9 +6,59 @@ use nostalre_formats::gnd::GndFile;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ground {
     Grass,
+    /// Grows like grass, the short bush kind: forest floor
+    Forest,
     /// A few tufts: hills, dirt
     Sparse,
     Never,
+}
+
+/// A grass kind: its column in the blade picture, left to right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// Seed heads, straw: hills, dirt
+    Dry = 0,
+    /// Meadow
+    Tall = 1,
+    /// Short and dense: forest floor
+    Bush = 2,
+}
+
+pub const KINDS: u32 = 3;
+
+/// Flora among the grass, in the flora row of the art left to right; a tuft's kind number is `KINDS` + this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flora {
+    Fern = 0,
+    BrownMushroom = 1,
+    RedMushroom = 2,
+    Flower = 3,
+    /// Broad leaves: commoner than the rest, a ground cover among the grass
+    Leafy = 4,
+    /// Bird's nest fern: long wavy strap leaves arching out from a centre
+    NestFern = 5,
+}
+
+pub const FLORA_KINDS: u32 = 6;
+/// Flora cells per row of the art (two rows)
+pub const FLORA_COLUMNS: u32 = 3;
+
+impl Flora {
+    /// The tuft kind number it is drawn with
+    pub fn kind(self) -> u32 {
+        KINDS + self as u32
+    }
+}
+
+impl Ground {
+    pub fn kind(self) -> Option<Kind> {
+        match self {
+            Self::Sparse => Some(Kind::Dry),
+            Self::Grass => Some(Kind::Tall),
+            Self::Forest => Some(Kind::Bush),
+            Self::Never => None,
+        }
+    }
 }
 
 /// A GND texture's class and its average colour (0 to 1), the tufts' tint.
@@ -18,8 +68,12 @@ pub struct TextureInfo {
     pub rgb: [f32; 3],
 }
 
-/// meadow, grass floor, forest floor, lawn
-const GRASS_WORDS: [&str; 5] = ["초원", "풀바닥", "숲속바닥", "잔디", "grass"];
+/// forest floor
+const FOREST_WORDS: [&str; 1] = ["숲속바닥"];
+/// meadow, grass floor, lawn
+const GRASS_WORDS: [&str; 4] = ["초원", "풀바닥", "잔디", "grass"];
+/// Green ground darker than this (by its colour alone) is forest floor.
+const FOREST_LUMA: f32 = 0.3;
 /// hill, dirt
 const SPARSE_WORDS: [&str; 2] = ["언덕", "흙"];
 /// cliff, water bed, rock, town, bare earth, and the void fillers
@@ -45,12 +99,14 @@ pub fn classify_texture(path: &str, avg_rgb: [f32; 3]) -> Ground {
     let has = |words: &[&str]| words.iter().any(|w| file.contains(w));
     if has(&NEVER_WORDS) {
         Ground::Never
+    } else if has(&FOREST_WORDS) {
+        Ground::Forest
     } else if has(&GRASS_WORDS) {
         Ground::Grass
     } else if has(&SPARSE_WORDS) {
         Ground::Sparse
     } else if looks_green(avg_rgb) {
-        Ground::Grass
+        if luma(avg_rgb) < FOREST_LUMA { Ground::Forest } else { Ground::Grass }
     } else {
         Ground::Never
     }
@@ -69,7 +125,7 @@ pub fn luma([r, g, b]: [f32; 3]) -> f32 {
 
 /// A model face this close above the ground (or just under it) is a floor grass must not poke through: a tuft's
 /// height plus a little.
-pub const FLOOR_REACH: f32 = 6.5;
+pub const FLOOR_REACH: f32 = super::scatter::TUFT_MAX_HEIGHT + 1.0;
 
 /// The cells under a model floor: near-horizontal faces of `triangles` (world space) at most `FLOOR_REACH` above
 /// the ground. Indexed like `gnd.cells`.

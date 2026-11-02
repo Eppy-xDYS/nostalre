@@ -5,6 +5,7 @@
 pub mod atlas;
 pub mod chunks;
 pub mod classify;
+pub mod flora;
 pub mod scatter;
 
 use nostalre_formats::gnd::GndFile;
@@ -65,6 +66,8 @@ struct GrassUniform {
     colored: f32,
     aspect: f32,
     _pad: f32,
+    /// Per flora: height, card aspect, sway, own colours (`flora::LOOKS`)
+    flora: [[f32; 4]; flora::LOOKS.len()],
 }
 
 /// What the shader needs to know about the art in use.
@@ -118,6 +121,8 @@ pub struct GrassRenderer {
     draw: Vec<usize>,
     tier: Tier,
     density: f32,
+    /// 0 to 1: ferns, mushrooms, flowers among the grass
+    flora: f32,
 }
 
 impl GrassRenderer {
@@ -170,6 +175,7 @@ impl GrassRenderer {
             draw: Vec::new(),
             tier: Tier::High,
             density: 1.0,
+            flora: scatter::FLORA_DEFAULT,
         }
     }
 
@@ -201,6 +207,15 @@ impl GrassRenderer {
         self.density = density;
         self.resident.clear();
         self.draw.clear();
+    }
+
+    /// Flora among the grass, 0 to 1: made chunks are remade with it over the next frames.
+    pub fn set_flora(&mut self, flora: f32) {
+        if flora != self.flora {
+            self.flora = flora;
+            self.resident.clear();
+            self.draw.clear();
+        }
     }
 
     /// The quality: made chunks are remade with it over the next frames.
@@ -241,7 +256,7 @@ impl GrassRenderer {
             .copied()
             .collect::<Vec<_>>();
         for key in missing {
-            let tufts = field.chunk_tufts(key.0, key.1, self.tier, self.density);
+            let tufts = field.chunk_tufts(key.0, key.1, self.tier, self.density, self.flora);
             let buffer = (!tufts.is_empty()).then(|| {
                 use wgpu::util::DeviceExt;
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -268,6 +283,7 @@ impl GrassRenderer {
             colored: self.art.colored,
             aspect: self.art.aspect,
             _pad: 0.0,
+            flora: flora::LOOKS,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
     }
@@ -305,7 +321,8 @@ fn atlas_bind_group(
         label: Some("grass_atlas"),
         size: wgpu::Extent3d {
             width: art.width,
-            height: art.height,
+            // the grass row over the two flora rows
+            height: art.height * 3,
             depth_or_array_layers: 1,
         },
         mip_level_count: levels.len() as u32,
@@ -316,7 +333,7 @@ fn atlas_bind_group(
         view_formats: &[],
     });
     for (level, data) in levels.iter().enumerate() {
-        let (w, h) = ((art.width >> level).max(1), (art.height >> level).max(1));
+        let (w, h) = ((art.width >> level).max(1), ((art.height * 3) >> level).max(1));
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,

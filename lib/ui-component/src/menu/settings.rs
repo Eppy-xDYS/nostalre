@@ -78,6 +78,7 @@ enum Opt {
     LightPools,
     SunGlow,
     Grass,
+    Flora,
     SceneLight,
     CloudShadows,
     NightLook,
@@ -143,6 +144,7 @@ impl Opt {
             Self::LightPools => "Light pools",
             Self::SunGlow => "Sun glow",
             Self::Grass => "Grass",
+            Self::Flora => "Flora",
             Self::SceneLight => "Scene light",
             Self::CloudShadows => "Cloud shadows",
             Self::NightLook => "Night look",
@@ -192,6 +194,7 @@ impl Opt {
             Self::LightPools => "Soft glow where lamps light the ground. 0%: off.",
             Self::SunGlow => "Bright sunlit stone glows a little. 0%: off.",
             Self::Grass => "Swaying grass on fields and meadows. 0%: off.",
+            Self::Flora => "Ferns, mushrooms and flowers in patches among the grass, most on forest floor. 0%: grass only.",
             Self::SceneLight => "Softer baked light and shadows; street lamps light the ground.",
             Self::CloudShadows => "Cloud shadows drifting over the land outdoors. 0%: off.",
             Self::NightLook => "A moonlit night outdoors with lamps lighting the ground. Off: the original's.",
@@ -216,6 +219,7 @@ impl Opt {
             | Self::LightPools
             | Self::SunGlow
             | Self::Grass
+            | Self::Flora
             | Self::CloudShadows
             | Self::LampLight
             | Self::NightDarkness
@@ -279,6 +283,7 @@ impl Opt {
             | Self::LightPools
             | Self::SunGlow
             | Self::Grass
+            | Self::Flora
             | Self::CloudShadows
             | Self::LampLight
             | Self::NightDarkness
@@ -295,6 +300,7 @@ impl Opt {
             Self::LightPools => Some(&mut v.graphics.hd.light_pools),
             Self::SunGlow => Some(&mut v.graphics.hd.sun_glow),
             Self::Grass => Some(&mut v.graphics.hd.grass),
+            Self::Flora => Some(&mut v.graphics.hd.flora),
             Self::CloudShadows => Some(&mut v.graphics.hd.cloud_shadows),
             Self::LampLight => Some(&mut v.graphics.hd.lamp_light),
             Self::NightDarkness => Some(&mut v.graphics.hd.night_darkness),
@@ -543,6 +549,7 @@ impl Page {
                 O(Opt::LightPools),
                 O(Opt::SunGlow),
                 O(Opt::Grass),
+                O(Opt::Flora),
                 O(Opt::SceneLight),
                 O(Opt::CloudShadows),
                 O(Opt::NightLook),

@@ -829,6 +829,7 @@ impl ApplicationHandler for App {
                 vignette: self.config.custom.hd.vignette,
                 glow: self.config.custom.hd.glow_levels(),
                 grass: self.config.custom.hd.grass_density(),
+                flora: self.config.custom.hd.flora_density(),
                 grass_tier: self.config.custom.hd.grass_tier(),
                 scene: config::Config::hd_scene(&self.config.custom.hd),
                 shadow_strength: self.config.custom.hd.shadow_strength(),
