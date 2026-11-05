@@ -37,6 +37,8 @@ pub struct UiFrame<'a> {
     in_popup_layer: bool,
     keyboard_blocked: bool,
     keyboard_owner: Option<WidgetId>,
+    typing: bool,
+    typing_tapped: bool,
 }
 
 #[derive(Default)]
@@ -47,6 +49,10 @@ pub struct UiOutput {
     pub tooltip_draw_calls: Vec<DrawCall>,
     pub any_hovered: bool,
     pub any_interactive_hovered: bool,
+    /// A text field read the keys this frame: a touch screen wants its on-screen keyboard
+    pub typing: bool,
+    /// The focused text field was tapped: its keyboard comes back if the player put it away
+    pub typing_tapped: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -320,6 +326,8 @@ impl<'a> UiFrame<'a> {
             in_popup_layer: false,
             keyboard_blocked: false,
             keyboard_owner,
+            typing: false,
+            typing_tapped: false,
         }
     }
 
@@ -815,6 +823,7 @@ impl<'a> UiFrame<'a> {
         }
 
         if response.has_focus {
+            self.typing(response.clicked);
             state.process_keys(self.ctx);
             self.state
                 .get_or_default::<KeyboardOwner>(KEYBOARD_OWNER_STATE_ID)
@@ -1052,7 +1061,15 @@ impl<'a> UiFrame<'a> {
             tooltip_draw_calls: self.tooltip_draw_calls,
             any_hovered: self.any_hovered,
             any_interactive_hovered: self.any_interactive_hovered,
+            typing: self.typing,
+            typing_tapped: self.typing_tapped,
         }
+    }
+
+    /// A text field reads the keys this frame (`tapped`: the player tapped it), for the on-screen keyboard
+    pub fn typing(&mut self, tapped: bool) {
+        self.typing = true;
+        self.typing_tapped |= tapped;
     }
 
     pub fn set_focus(&mut self, id: WidgetId) {

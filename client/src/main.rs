@@ -119,6 +119,7 @@ struct App {
     config: Config,
     touch_mouse: input::touch::TouchMouse,
     gamepad: input::gamepad::Gamepad,
+    soft_keyboard: input::soft_keyboard::SoftKeyboard,
     /// Between suspended and resumed: no surface to draw on.
     suspended: bool,
     saved_window_positions: HashMap<u32, [f32; 2]>,
@@ -214,6 +215,7 @@ impl App {
         Self {
             touch_mouse: Default::default(),
             gamepad: Default::default(),
+            soft_keyboard: Default::default(),
             suspended: false,
             config,
             saved_window_positions,
@@ -1073,9 +1075,12 @@ impl ApplicationHandler for App {
                         tooltip_draw_calls,
                         any_hovered: ui_any_hovered,
                         any_interactive_hovered: ui_any_interactive,
+                        typing,
+                        typing_tapped,
                     },
                     ui_events,
                 ) = self.build_ui(elapsed);
+                self.soft_keyboard.frame(typing, typing_tapped);
                 self.input.ui_hovered = ui_any_hovered;
                 let menu_art = self.windows.menu.take_wanted_textures();
                 if !menu_art.is_empty() {
@@ -1321,6 +1326,8 @@ pub fn desktop_main() {
 #[unsafe(no_mangle)]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
+
+    input::soft_keyboard::set_android_app(&app);
 
     // a panic must end the ":game" process too, or the next game session finds winit's event loop taken; one
     // in packet dispatch is caught there and only drops the packet
