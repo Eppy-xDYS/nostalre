@@ -1,7 +1,7 @@
 //! The on-screen controls of a touch screen (the design canvas, "Touch HUD" and "Camera on controller and
 //! touch"): a move stick bottom left with the camera's turn buttons over it, Attack bottom right with four
-//! skills in an arc, three more slots beside them, the hotbar set; zoom and reset beside the minimap. Over the
-//! arc, while an NPC is in reach, a Talk button with its name.
+//! skills in an arc, three more slots beside them, the hotbar set, Sit over it while the player can sit; zoom and
+//! reset beside the minimap. Over the arc, while an NPC is in reach, a Talk button with its name.
 //!
 //! Several fingers work at once. A finger that lands on a control (and not on a window drawn over it) is the
 //! controls' until it lifts: the client never makes it the mouse (`touch_zones`), and only such fingers press
@@ -21,6 +21,7 @@ const RESET_ID: WidgetId = WidgetId(7015);
 const ATTACK_ID: WidgetId = WidgetId(7016);
 const SET_ID: WidgetId = WidgetId(7017);
 const TALK_ID: WidgetId = WidgetId(7018);
+const SIT_ID: WidgetId = WidgetId(7019);
 /// The slot buttons: the arc's four, then the three beside it, 7020 to 7026
 const SLOT_BASE_ID: u32 = 7020;
 
@@ -50,6 +51,8 @@ const ARC_DEG: [f32; 4] = [190.0, 155.0, 120.0, 85.0];
 const SET_DEG: f32 = 50.0;
 const SET_R: f32 = 112.0;
 const SET_SIZE: f32 = 42.0;
+/// Between the set and Sit over it
+const SIT_GAP: f32 = 8.0;
 const SET_LABELS: [&str; PAD_SETS as usize] = ["1/3", "2/3", "3/3"];
 const ITEM_SIZE: f32 = 56.0;
 const ICON: f32 = 38.0;
@@ -85,6 +88,8 @@ pub struct TouchSlots {
     pub faces: [Option<SlotFace>; SLOT_BUTTONS],
     /// The NPC a tap on Talk talks to, by name ("" when it has none yet); no Talk button without one
     pub talk: Option<String>,
+    /// Whether the player sits now, while they can sit or stand; no Sit button otherwise
+    pub sit: Option<bool>,
 }
 
 impl TouchSlots {
@@ -109,6 +114,8 @@ pub struct TouchInput {
     pub slot: Option<usize>,
     pub next_set: bool,
     pub talk: bool,
+    /// Sit down, or stand up
+    pub sit: bool,
 }
 
 /// A finger the controls own, or the mouse while its button is down
@@ -133,12 +140,14 @@ struct Layout {
     slots: [Rect; SLOT_BUTTONS],
     /// While an NPC is in reach
     talk: Option<Rect>,
+    /// While the player can sit or stand
+    sit: Option<Rect>,
 }
 
 impl Layout {
     /// `minimap`: where the HUD drew it; `dock`: the skill rows' rectangle, which the slot row keeps clear of;
-    /// `talk`: an NPC is in reach
-    fn new(w: f32, h: f32, minimap: Rect, dock: Rect, talk: bool) -> Self {
+    /// `talk`: an NPC is in reach; `sit`: the player can sit or stand
+    fn new(w: f32, h: f32, minimap: Rect, dock: Rect, talk: bool, sit: bool) -> Self {
         let stick = (STICK_MARGIN + STICK_R, h - STICK_BOTTOM - STICK_R);
         let turn_top = stick.1 - STICK_R - GAP - TURN_SIZE;
         let column = minimap.x - GAP - SMALL_SIZE;
@@ -181,8 +190,12 @@ impl Layout {
                 TALK_H,
             )
         });
+        let set = round(SET_DEG, SET_R, SET_SIZE);
+        // over the set, clear of the Talk pill
+        let sit = sit.then(|| Rect::new(set.x, set.y - SET_SIZE - SIT_GAP, SET_SIZE, SET_SIZE));
         Self {
             talk,
+            sit,
             stick,
             turn_left: Rect::new(STICK_MARGIN, turn_top, TURN_SIZE, TURN_SIZE),
             turn_right: Rect::new(
@@ -195,7 +208,7 @@ impl Layout {
             zoom_out: small(1.0),
             reset: small(2.0),
             attack: centred(ax, ay, ATTACK_SIZE),
-            set: round(SET_DEG, SET_R, SET_SIZE),
+            set,
             slots,
         }
     }
@@ -215,7 +228,11 @@ impl Layout {
             self.attack,
             self.set,
         ];
-        fixed.into_iter().chain(self.slots).chain(self.talk)
+        fixed
+            .into_iter()
+            .chain(self.slots)
+            .chain(self.talk)
+            .chain(self.sit)
     }
 }
 
@@ -250,6 +267,7 @@ impl TouchControls {
             minimap,
             dock,
             false,
+            false,
         );
         self.owned.clear();
         self.stick = None;
@@ -265,7 +283,14 @@ impl TouchControls {
         slots: &TouchSlots,
     ) -> TouchInput {
         let (w, h) = (ui.ctx.screen_width, ui.ctx.screen_height);
-        let layout = Layout::new(w, h, minimap, dock, slots.talk.is_some());
+        let layout = Layout::new(
+            w,
+            h,
+            minimap,
+            dock,
+            slots.talk.is_some(),
+            slots.sit.is_some(),
+        );
         self.zones.clear();
         self.zones.extend(layout.zones());
         let (ptrs, count) = self.pointers(ui);
@@ -280,6 +305,7 @@ impl TouchControls {
         let zoom_in = press(ui, ZOOM_IN_ID, layout.zoom_in);
         let zoom_out = press(ui, ZOOM_OUT_ID, layout.zoom_out);
         let reset = press(ui, RESET_ID, layout.reset);
+        let sit = layout.sit.map(|r| (r, press(ui, SIT_ID, r)));
         let attack = press(ui, ATTACK_ID, layout.attack);
         let set = press(ui, SET_ID, layout.set);
         let talk = layout.talk.map(|r| (r, press(ui, TALK_ID, r)));
@@ -296,7 +322,10 @@ impl TouchControls {
             (layout.reset, reset),
             (layout.attack, attack),
             (layout.set, set),
-        ] {
+        ]
+        .into_iter()
+        .chain(sit)
+        {
             round_button(ui, r, p.held);
         }
         if let Some((r, p)) = talk {
@@ -333,6 +362,9 @@ impl TouchControls {
             }
         }
         label(ui, layout.attack, "Attack");
+        if let (Some((r, _)), Some(sitting)) = (sit, slots.sit) {
+            label(ui, r, if sitting { "Stand" } else { "Sit" });
+        }
         if let (Some((r, _)), Some(name)) = (talk, &slots.talk) {
             let text = if name.is_empty() {
                 "Talk".to_string()
@@ -358,6 +390,7 @@ impl TouchControls {
         out.zoom = f32::from(zoom_out.held) - f32::from(zoom_in.held);
         out.reset = reset.tapped;
         out.attack = attack.tapped;
+        out.sit = sit.is_some_and(|(_, p)| p.tapped);
         out.next_set = set.tapped;
         out.slot = slot_presses.iter().position(|p| p.tapped);
         out.talk = talk.is_some_and(|(_, p)| p.tapped);
@@ -543,7 +576,7 @@ mod tests {
     fn layout() -> Layout {
         let minimap = Rect::new(1300.0, 14.0, 190.0, 190.0);
         let dock = Rect::new(500.0, 700.0, 534.0, 50.0);
-        Layout::new(1536.0, 864.0, minimap, dock, true)
+        Layout::new(1536.0, 864.0, minimap, dock, true, true)
     }
 
     #[test]
@@ -574,7 +607,7 @@ mod tests {
         // a 1080p handheld at Android's 150%, its minimap and skill rows where the HUD draws them there
         let minimap = Rect::new(1077.0, 40.0, 187.0, 187.0);
         let dock = Rect::new(390.0, 583.0, 500.0, 137.0);
-        no_overlap(Layout::new(1280.0, 720.0, minimap, dock, true));
+        no_overlap(Layout::new(1280.0, 720.0, minimap, dock, true, true));
     }
 
     fn no_overlap(layout: Layout) {
@@ -607,7 +640,7 @@ mod tests {
     fn the_slot_row_keeps_off_the_skill_rows() {
         let minimap = Rect::new(800.0, 14.0, 150.0, 150.0);
         let dock = Rect::new(280.0, 400.0, 534.0, 150.0);
-        let l = Layout::new(1100.0, 600.0, minimap, dock, true);
+        let l = Layout::new(1100.0, 600.0, minimap, dock, true, true);
         for r in &l.slots[4..] {
             assert!(r.y + r.h <= dock.y, "{r:?}");
         }

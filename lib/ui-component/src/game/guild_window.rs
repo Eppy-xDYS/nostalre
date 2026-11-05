@@ -1343,6 +1343,7 @@ impl GuildWindow {
             ui.any_interactive_hovered = true;
         }
         if resp.has_focus() {
+            ui.typing(resp.clicked());
             self.notice_body_input.process_keys(ui.ctx);
         }
         let focused = resp.has_focus();

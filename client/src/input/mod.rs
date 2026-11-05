@@ -1,4 +1,5 @@
 pub(crate) mod gamepad;
+pub(crate) mod soft_keyboard;
 pub(crate) mod touch;
 mod window_events;
 

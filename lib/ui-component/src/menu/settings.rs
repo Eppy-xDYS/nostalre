@@ -1116,6 +1116,7 @@ impl Settings {
         }
         // typing: the menu's keys are held back, the field reads the raw ones
         if let Some(input) = &mut self.editing {
+            ui.typing(false);
             input.process_keys(ui.ctx);
             if ui.ctx.key_enter || commit_tap {
                 self.commit_line(now, events);

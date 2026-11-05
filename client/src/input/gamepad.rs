@@ -3,8 +3,8 @@
 //! a dialog A goes on and B cancels; in a shop A moves a line across, Start buys). L1, R1 or both held with a face
 //! button use a hotbar slot, in one of three sets (Select+L1/R1). The camera is ours (the design canvas,
 //! "Camera on controller and touch"): L2/R2 turn it, with Select held they tilt it, Select+Up/Down zooms, R3
-//! puts the starting view back. Start is Enter, Select+Start Escape, the D-pad alone the arrow keys. While the
-//! HUD's menu is open, A, B, X, Y, L1 and R1 are its keys (`menu_press`).
+//! puts the starting view back. L3 sits down or stands up. Start is Enter, Select+Start Escape, the D-pad alone
+//! the arrow keys. While the HUD's menu is open, A, B, X, Y, L1 and R1 are its keys (`menu_press`).
 //!
 //! Buttons arrive as key events carrying the Android keycode; sticks, the D-pad hat and the triggers as
 //! DeviceEvent::Motion (vendor/winit). Android only for now.
@@ -19,14 +19,16 @@ use winit::keyboard::{Key, KeyCode, NativeKey, PhysicalKey};
 use winit::window::WindowId;
 
 use crate::App;
+use models::enums::skill_enums::SkillEnum;
 use nostalre_game::aim::{
     AimInput, AimTarget, aim_candidate, aim_dir, aim_target, buff_candidate, buff_target,
 };
 use nostalre_game::app_state::AppState;
 use nostalre_game::cursor::PendingSkillTarget;
-use nostalre_game::entity::EntityType;
+use nostalre_game::entity::{EntityState, EntityType};
 use nostalre_game::entity_collection::TALK_RANGE;
 use nostalre_game::hotkey::{PAD_SET_SLOTS, PAD_SETS};
+use nostalre_game::keybinding::HotkeyAction;
 use nostalre_game::targeting::{TargetClass, revives_corpse, skill_target_class};
 use nostalre_renderer::camera::CameraControl;
 
@@ -76,6 +78,7 @@ pub(crate) enum Button {
     R1,
     L2,
     R2,
+    L3,
     R3,
     Start,
     Select,
@@ -97,6 +100,7 @@ impl Button {
             103 => Self::R1,
             104 => Self::L2,
             105 => Self::R2,
+            106 => Self::L3,
             107 => Self::R3,
             108 => Self::Start,
             109 => Self::Select,
@@ -441,6 +445,7 @@ impl App {
                     self.talk_to_nearest_npc();
                 }
             }
+            Button::L3 if in_game => self.run_action(HotkeyAction::SitStand),
             Button::R3 if in_game => self.gamepad.reset = true,
             _ => {}
         }
@@ -571,6 +576,7 @@ impl App {
         .flatten()
         .map(|(_, name)| name.unwrap_or_default().to_string());
         self.windows.hud.input.touch_slots.talk = talk;
+        self.windows.hud.input.touch_slots.sit = self.sit_state();
         let touch = self.windows.hud.touch_input();
         if touch.attack {
             self.attack_closest_monster();
@@ -578,12 +584,32 @@ impl App {
         if touch.talk {
             self.talk_to_nearest_npc();
         }
+        if touch.sit {
+            self.run_action(HotkeyAction::SitStand);
+        }
         if let Some(i) = touch.slot {
             let slot = self.windows.hud.input.touch_slots.slot(i);
             self.use_hotbar_slot(slot);
         }
         if touch.next_set {
             self.gamepad.set = (self.gamepad.set + 1) % PAD_SETS;
+        }
+    }
+
+    /// Whether the player sits now, while the server would let them sit or stand: Basic Skill 3, alive, not
+    /// hidden (rAthena's `pc_checkskill(sd, NV_BASIC) < 3` refusal)
+    fn sit_state(&self) -> Option<bool> {
+        let basic = self.game.character.skills.get_skill(SkillEnum::NvBasic);
+        if basic.is_none_or(|s| s.level < 3)
+            || self.game.session.player_dead
+            || self.player_hidden()
+        {
+            return None;
+        }
+        let player = self.game.world.entities.player()?;
+        match player.state() {
+            EntityState::Dead => None,
+            state => Some(state == EntityState::Sitting),
         }
     }
 
